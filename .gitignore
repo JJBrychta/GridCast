@@ -1,0 +1,57 @@
+# ---- Python ----
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info/
+.eggs/
+
+# ---- Virtual envs / package managers ----
+.venv/
+venv/
+env/
+.uv/
+
+# ---- Secrets / config ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ---- Editors / IDEs / OS ----
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# ---- AI tooling ----
+.claude/
+.aider*
+.cursor/
+
+# ---- GridCast data (all rebuildable / local-only) ----
+raw/
+data/
+*.sqlite
+*.sqlite3
+*.db
+*.parquet
+fetch_log.csv
+
+# ---- FastF1 cache ----
+fastf1_cache/
+cache/
+.fastf1/
+
+# ---- Notebooks ----
+.ipynb_checkpoints/
+
+# ---- Logs ----
+*.log
+
+# ---- Keep folder structure for local-only dirs ----
+!raw/.gitkeep
+!data/.gitkeep
