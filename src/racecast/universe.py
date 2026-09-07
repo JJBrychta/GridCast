@@ -9,6 +9,7 @@ from racecast.cache import enable_cache
 from racecast.config import (
     FIRST_SEASON,
     RAW_DIR,
+    SCHEDULE_DATE_COLUMNS,
     SCHEDULE_FETCH_DELAY,
     SESSION_NAME_TO_TYPE,
 )
@@ -25,6 +26,19 @@ class Unit:
         return f"{self.season}-R{self.round:02d}-{self.session_type}"
 
 
+def _normalize_dates(schedule: pd.DataFrame) -> pd.DataFrame:
+    """Force the schedule's date columns to datetime, whatever the source.
+
+    A fresh FastF1 fetch gives datetime64; the cached schedule.json gives
+    epoch-millis. ``pd.to_datetime(..., unit="ms")`` is a no-op on the former
+    and the right conversion for the latter.
+    """
+    for col in SCHEDULE_DATE_COLUMNS:
+        if col in schedule.columns:
+            schedule[col] = pd.to_datetime(schedule[col], unit="ms", errors="coerce")
+    return schedule
+
+
 def load_schedule(
     season: int, *, current_season: int, fetch_delay: float = 0.0
 ) -> pd.DataFrame:
@@ -37,7 +51,7 @@ def load_schedule(
     path = RAW_DIR / str(season) / "schedule.json"
 
     if path.exists() and season < current_season:
-        return pd.read_json(path, orient="records")
+        return _normalize_dates(pd.read_json(path, orient="records"))
 
     schedule = with_retries(
         lambda: fastf1.get_event_schedule(season),
@@ -50,22 +64,43 @@ def load_schedule(
     else:
         print(f"Universe generator found new season: {season}")
     schedule.to_json(path, orient="records", indent=2)
-    return schedule
+    return _normalize_dates(schedule)
 
 
-def iter_units(schedule: pd.DataFrame, season: int) -> Iterator[Unit]:
-    """One Unit per (round, wanted session type).
+def iter_units(
+    schedule: pd.DataFrame, season: int, *, now: datetime | None = None
+) -> Iterator[Unit]:
+    """One Unit per wanted session that has already started.
 
-    Round 0 is always pre-season testing (possibly several test weekends, all
-    numbered 0) -> skipped. Every real race weekend has exactly one Qualifying
-    and one Race, so for the current session scope we don't need to look at the
-    per-event session names at all.
+    Round 0 (pre-season testing, possibly several weekends, all numbered 0) is
+    skipped. For each event we scan its session slots Session1..Session5: a slot
+    whose name is in SESSION_NAME_TO_TYPE is emitted, but only once its own
+    SessionNDateUtc is in the past -- so an upcoming weekend's qualifying enters
+    the universe on its Saturday and the race the next day. Qualifying isn't
+    always the same slot (sprint weekends move it), hence matching by name.
     """
-    for round_number in schedule["RoundNumber"]:
+    if now is None:
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+    cutoff = pd.Timestamp(now)
+
+    for _, row in schedule.iterrows():
+        round_number = int(row["RoundNumber"])
         if round_number < 1:
             continue
-        for session_type in SESSION_NAME_TO_TYPE.values():
-            yield Unit(season, int(round_number), session_type)
+        for slot in range(1, 6):
+            session_type = SESSION_NAME_TO_TYPE.get(row.get(f"Session{slot}"))
+            # Did not match wanted session type
+            if session_type is None:
+                continue
+            started = row.get(f"Session{slot}DateUtc")
+            if pd.isna(started):
+                started = row.get("EventDate")
+            if pd.isna(started):
+                if season < cutoff.year:  # ancient & undated -> it happened
+                    yield Unit(season, round_number, session_type)
+                continue
+            if pd.Timestamp(started) <= cutoff:
+                yield Unit(season, round_number, session_type)
 
 
 class UniverseGenerator:
@@ -95,7 +130,7 @@ class UniverseGenerator:
 
 
 if __name__ == "__main__":
-    universe = UniverseGenerator().generate()
+    universe = UniverseGenerator(first_season=2026, last_season=2026).generate()
     print(f"{len(universe)} units")
     for unit in universe:
         print(unit)

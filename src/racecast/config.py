@@ -11,6 +11,18 @@ FIRST_SEASON = 1950
 # Seconds to wait between uncached schedule fetches — keeps us under the Ergast
 # API burst limit when backfilling many seasons at once. Bump if you still 429.
 SCHEDULE_FETCH_DELAY = 0.6
+SESSION_FETCH_DELAY = 0.6
+
+# Schedule columns holding datetimes. Normalised on load: the cached schedule.json
+# stores them as epoch-millis, a fresh fetch gives datetime64 — this unifies both.
+SCHEDULE_DATE_COLUMNS = (
+    "EventDate",
+    "Session1DateUtc",
+    "Session2DateUtc",
+    "Session3DateUtc",
+    "Session4DateUtc",
+    "Session5DateUtc",
+)
 
 # FastF1 schedule session-name  ->  our slug. Add sprint types later.
 SESSION_NAME_TO_TYPE = {
