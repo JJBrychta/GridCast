@@ -17,5 +17,3 @@ SESSION_NAME_TO_TYPE = {
     "Qualifying": "qualifying",
     "Race": "race",
 }
-
-#

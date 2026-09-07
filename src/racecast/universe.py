@@ -26,34 +26,34 @@ class Unit:
 
 
 def load_schedule(
-    year: int, *, current_year: int, fetch_delay: float = 0.0
+    season: int, *, current_season: int, fetch_delay: float = 0.0
 ) -> pd.DataFrame:
-    """Season event schedule. Cached on disk for past years, always re-fetched
-    for the current year (new GPs get added mid-season).
+    """Season event schedule. Cached on disk for past seasons, always re-fetched
+    for the current season (new GPs get added mid-season).
 
-    ``fetch_delay`` throttles the API call (skipped entirely for cached years).
+    ``fetch_delay`` throttles the API call (skipped entirely for cached seasons).
     """
 
-    path = RAW_DIR / str(year) / "schedule.json"
+    path = RAW_DIR / str(season) / "schedule.json"
 
-    if path.exists() and year < current_year:
+    if path.exists() and season < current_season:
         return pd.read_json(path, orient="records")
 
     schedule = with_retries(
-        lambda: fastf1.get_event_schedule(year),
-        what=f"event schedule {year}",
+        lambda: fastf1.get_event_schedule(season),
+        what=f"event schedule {season}",
         pre_delay=fetch_delay,
     )
     path.parent.mkdir(parents=True, exist_ok=True)
-    if year == current_year:
-        print(f"Current season: {current_year}")
+    if season == current_season:
+        print(f"Current season: {season}")
     else:
-        print(f"Universe generator found new season: {year}")
+        print(f"Universe generator found new season: {season}")
     schedule.to_json(path, orient="records", indent=2)
     return schedule
 
 
-def iter_units(schedule: pd.DataFrame, year: int) -> Iterator[Unit]:
+def iter_units(schedule: pd.DataFrame, season: int) -> Iterator[Unit]:
     """One Unit per (round, wanted session type).
 
     Round 0 is always pre-season testing (possibly several test weekends, all
@@ -65,35 +65,37 @@ def iter_units(schedule: pd.DataFrame, year: int) -> Iterator[Unit]:
         if round_number < 1:
             continue
         for session_type in SESSION_NAME_TO_TYPE.values():
-            yield Unit(year, int(round_number), session_type)
+            yield Unit(season, int(round_number), session_type)
 
 
 class UniverseGenerator:
     def __init__(
         self,
-        start_year: int = FIRST_SEASON,
-        end_year: int | None = None,
+        first_season: int = FIRST_SEASON,
+        last_season: int | None = None,
         fetch_delay: float = SCHEDULE_FETCH_DELAY,
     ):
-        now_year = datetime.now(timezone.utc).year
-        self.start_year = start_year
-        self.end_year = end_year or now_year
+        current_season = datetime.now(timezone.utc).year
+        self.first_season = first_season
+        self.last_season = last_season or current_season
         self.fetch_delay = fetch_delay
 
     def generate(self) -> list[Unit]:
         enable_cache()
-        current_year = datetime.now(timezone.utc).year
+        current_season = datetime.now(timezone.utc).year
         units: list[Unit] = []
-        for year in range(self.start_year, self.end_year + 1):
+        for season in range(self.first_season, self.last_season + 1):
             schedule = load_schedule(
-                year, current_year=current_year, fetch_delay=self.fetch_delay
+                season,
+                current_season=current_season,
+                fetch_delay=self.fetch_delay,
             )
-            units.extend(iter_units(schedule, year))
+            units.extend(iter_units(schedule, season))
         return units
 
 
 if __name__ == "__main__":
     universe = UniverseGenerator().generate()
     print(f"{len(universe)} units")
-    # for unit in universe:
-    #     print(unit)
+    for unit in universe:
+        print(unit)
