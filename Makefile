@@ -1,12 +1,16 @@
-.PHONY: pipeline universe clean-raw clean-cache clean
+.PHONY: pipeline universe fetch clean-raw clean-cache clean
 
-# Build the universe (1950 -> current year) and cache season schedules.
+# Build the universe (1950 -> current season) and cache season schedules.
 pipeline:
 	uv run python -m racecast.data_pipeline
 
 # Just the universe generator's own __main__ (current season only).
 universe:
 	uv run python -m racecast.universe
+
+# Step 2: download raw session results for units not yet on disk.
+fetch:
+	uv run python -m racecast.session_loader
 
 # Wipe raw/ but keep dotfiles (.gitkeep).
 clean-raw:

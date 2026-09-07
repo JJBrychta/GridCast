@@ -4,6 +4,7 @@ import pandas as pd
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
 from racecast.cache import enable_cache
 from racecast.config import (
@@ -24,6 +25,19 @@ class Unit:
 
     def __str__(self) -> str:
         return f"{self.season}-R{self.round:02d}-{self.session_type}"
+
+
+def raw_path(unit: Unit) -> Path:
+    """raw/<season>/round-NN/<session_type>.json — the unit's file on disk.
+
+    The fetch step's whole resume mechanism: a unit is done iff this file exists.
+    """
+    return (
+        RAW_DIR
+        / str(unit.season)
+        / f"round-{unit.round:02d}"
+        / f"{unit.session_type}.json"
+    )
 
 
 def _normalize_dates(schedule: pd.DataFrame) -> pd.DataFrame:
@@ -58,6 +72,16 @@ def load_schedule(
         what=f"event schedule {season}",
         pre_delay=fetch_delay,
     )
+
+    # A hard fetch failure (rate limit / every backend down) has already been
+    # raised as RateLimited by with_retries and never reaches here. What can
+    # still slip through is an empty frame — don't cache that, or a past season
+    # would trust the empty file forever. Return it unwritten; iter_units yields
+    # nothing for it and the next run retries the fetch.
+    if schedule is None or schedule.empty:
+        print(f"No schedule data for season {season}; will retry next run")
+        return schedule if schedule is not None else pd.DataFrame()
+
     path.parent.mkdir(parents=True, exist_ok=True)
     if season == current_season:
         print(f"Current season: {season}")
@@ -79,26 +103,46 @@ def iter_units(
     the universe on its Saturday and the race the next day. Qualifying isn't
     always the same slot (sprint weekends move it), hence matching by name.
     """
+    # FastF1's SessionNDateUtc values are naive UTC, so compare against a naive
+    # UTC "now". `now` is injectable so tests can pin a moment.
     if now is None:
         now = datetime.now(timezone.utc).replace(tzinfo=None)
     cutoff = pd.Timestamp(now)
 
     for _, row in schedule.iterrows():
+        # Round 0 == pre-season testing (there can be several, all numbered 0).
+        # Real championship rounds start at 1.
         round_number = int(row["RoundNumber"])
         if round_number < 1:
             continue
+
+        # A weekend has up to 5 session slots. We don't know which slot holds
+        # qualifying vs the race (sprint weekends reorder them), so walk all 5
+        # and match on the session *name*.
         for slot in range(1, 6):
+            # e.g. "Qualifying" -> "qualifying", "Race" -> "race";
+            # "Practice 2" / "Sprint" / "None" -> not in the map -> None.
             session_type = SESSION_NAME_TO_TYPE.get(row.get(f"Session{slot}"))
-            # Did not match wanted session type
             if session_type is None:
-                continue
+                continue  # not a session type we collect
+
+            # When did this session start? Prefer its own timestamp; fall back
+            # to the weekend date if the session one is missing (quali/race are
+            # within ~a day of it, close enough to decide "has it happened").
             started = row.get(f"Session{slot}DateUtc")
             if pd.isna(started):
                 started = row.get("EventDate")
+
             if pd.isna(started):
-                if season < cutoff.year:  # ancient & undated -> it happened
+                # No date anywhere. Only safe call: if the whole season is in
+                # the past it certainly ran; otherwise leave it out.
+                if season < cutoff.year:
                     yield Unit(season, round_number, session_type)
                 continue
+
+            # The gate: emit only once the session has actually started, so a
+            # future race never enters the universe but its qualifying (a day
+            # earlier) can — which is what the prediction workflow needs.
             if pd.Timestamp(started) <= cutoff:
                 yield Unit(season, round_number, session_type)
 
@@ -130,7 +174,7 @@ class UniverseGenerator:
 
 
 if __name__ == "__main__":
-    universe = UniverseGenerator(first_season=2026, last_season=2026).generate()
+    universe = UniverseGenerator(first_season=FIRST_SEASON, last_season=datetime.now().year).generate()
     print(f"{len(universe)} units")
     for unit in universe:
         print(unit)
