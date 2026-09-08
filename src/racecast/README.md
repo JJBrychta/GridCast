@@ -169,6 +169,14 @@ loaded 312 units, 41 API requests, in 720s
 `req/min` is an **upper bound** on real server load. Under ~8/min you're
 definitely safe against Jolpica's 500/h.
 
+Output is colour-coded (`ok` green, `no_data`/`retry` yellow, `error` /
+rate-limit stop red). While a unit is throttling + fetching, a transient
+`  <unit>  …  (Ns throttle + fetch)` line shows, overwritten by the result.
+Both are disabled automatically when stdout isn't a TTY or `NO_COLOR` is set.
+FastF1's own INFO/WARNING chatter is silenced by `enable_cache()`
+(`fastf1.set_log_level("ERROR")`) — this only lowers FastF1's console handler,
+so net.py's 429 log-probe is unaffected.
+
 ---
 
 ## Tests

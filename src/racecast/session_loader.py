@@ -29,13 +29,22 @@ from racecast.config import (
     SESSION_FETCH_DELAY,
     SESSION_TYPE_TO_NAME, FIRST_SEASON,
 )
+from racecast._console import clear_status, paint, status
 from racecast.net import RateLimited, with_retries
 from racecast.universe import Unit, UniverseGenerator, raw_path
+
 
 class Outcome(enum.Enum):
     OK = "ok"
     NO_DATA = "no_data"
     RETRY = "retry"
+
+
+_OUTCOME_STYLE: dict[Outcome, tuple[str, ...]] = {
+    Outcome.OK: ("green",),
+    Outcome.NO_DATA: ("yellow",),
+    Outcome.RETRY: ("yellow",),
+}
 
 
 def _load_session(unit: Unit):
@@ -126,6 +135,7 @@ def fetch(universe: list[Unit]) -> dict[Outcome, int]:
 
     for unit in todo:
         now = datetime.now(timezone.utc).replace(tzinfo=None)
+        status(paint(f"  {unit}  …  ({SESSION_FETCH_DELAY:.0f}s throttle + fetch)", "dim"))
         try:
             session = with_retries(
                 lambda: _load_session(unit),
@@ -135,12 +145,17 @@ def fetch(universe: list[Unit]) -> dict[Outcome, int]:
         except RateLimited as exc:
             # API said stop — bail cleanly, nothing half-written; next run resumes.
             loaded += 1  # the throttle sleep ran before the 429
-            print(f"\n{exc}\nStopping — re-run to resume from the first missing file.")
+            clear_status()
+            print(paint(
+                f"\n{exc}\nStopping — re-run to resume from the first missing file.",
+                "red", "bold",
+            ))
             break
         except Exception as exc:  # FastF1 raises many exception types
             # Unexpected but not fatal: leave no file so it's retried next run.
             loaded += 1
-            print(f"  {unit}  ->  error: {exc!r} (retry next run)")
+            clear_status()
+            print(f"  {unit}  ->  {paint('error', 'red')}: {exc!r} (retry next run)")
             counts[Outcome.RETRY] += 1
             continue
 
@@ -151,27 +166,33 @@ def fetch(universe: list[Unit]) -> dict[Outcome, int]:
             _atomic_write_json(raw_path(unit), payload)
         counts[outcome] += 1
 
-    # Statistics
         run = time.monotonic() - started
         reqs = Cache._request_counter - reqs0
         rpm = reqs / (run / 60) if run else 0.0
-        print(
-            f"  {unit}  ->  {outcome.value}"
-            f"    [{loaded} loaded · {reqs} reqs · {run:.0f}s · {rpm:.0f} req/min]"
+        tag = paint(outcome.value, *_OUTCOME_STYLE[outcome])
+        stats = paint(
+            f"[{loaded} loaded · {reqs} reqs · {run:.0f}s · {rpm:.0f} req/min]", "dim"
         )
+        clear_status()
+        print(f"  {unit}  ->  {tag}    {stats}")
 
     elapsed = time.monotonic() - started
     throttle = loaded * SESSION_FETCH_DELAY
     working = max(elapsed - throttle, 0.0)
     total_reqs = Cache._request_counter - reqs0
-    print("done: " + ", ".join(f"{o.value}={counts[o]}" for o in Outcome))
+
+    summary = ", ".join(
+        paint(f"{o.value}={counts[o]}", *_OUTCOME_STYLE[o]) for o in Outcome
+    )
+    print(paint("done: ", "bold") + summary)
     if loaded:
         rpm = total_reqs / (elapsed / 60) if elapsed else 0.0
-        print(
+        print(paint(
             f"loaded {loaded} units, {total_reqs} API requests, in {elapsed:.0f}s "
             f"= {working:.0f}s API + {throttle:.0f}s throttle "
-            f"({working / loaded:.1f}s/unit API, {rpm:.0f} req/min)"
-        )
+            f"({working / loaded:.1f}s/unit API, {rpm:.0f} req/min)",
+            "cyan",
+        ))
     return counts
 
 

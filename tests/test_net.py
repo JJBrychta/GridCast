@@ -181,3 +181,20 @@ class TestWithRetries:
     def test_unexpected_exception_propagates(self):
         with pytest.raises(KeyError):
             with_retries(lambda: raises(KeyError("boom")))
+
+    def test_probe_survives_fastf1_set_log_level_error(self):
+        """enable_cache() runs fastf1.set_log_level("ERROR"). That lowers
+        FastF1's *handler* level, not the logger — so a swallowed 429 logged on
+        a fastf1.* logger must still reach the probe on the root logger."""
+        import fastf1
+
+        fastf1.set_log_level("ERROR")
+        try:
+            def fn() -> str:
+                logging.getLogger("fastf1.core").warning("Request returned: 429")
+                return "empty-frame"
+
+            with pytest.raises(RateLimited):
+                with_retries(fn)
+        finally:
+            fastf1.set_log_level("INFO")
