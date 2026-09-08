@@ -193,9 +193,12 @@ def fetch(universe: list[Unit]) -> dict[Outcome, int]:
             f"({working / loaded:.1f}s/unit API, {rpm:.0f} req/min)",
             "cyan",
         ))
+
+    print(paint("All requested sessions fetched!!!", "green"))
+
     return counts
 
 
 if __name__ == "__main__":
-    universe = UniverseGenerator(first_season=FIRST_SEASON, last_season=datetime.now().year).generate()
+    universe = UniverseGenerator(first_season=2025, last_season=2025).generate()
     fetch(universe)

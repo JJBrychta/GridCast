@@ -15,6 +15,7 @@ from racecast.universe import (
     UniverseGenerator,
     _normalize_dates,
     iter_units,
+    load_circuits,
     load_schedule,
     raw_path,
 )
@@ -255,6 +256,59 @@ class TestLoadSchedule:
         assert not (self.raw / "1999" / "schedule.json").exists()
 
 
+class TestLoadCircuits:
+    @pytest.fixture(autouse=True)
+    def _raw_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("racecast.universe.RAW_DIR", tmp_path)
+        self.raw = tmp_path
+
+    def _stub_ergast(self, monkeypatch, frame: pd.DataFrame) -> list[int]:
+        seen: list[int] = []
+
+        class _FakeErgast:
+            def __init__(self, **_):
+                pass
+
+            def get_race_schedule(self, *, season):
+                seen.append(season)
+                return frame
+
+        monkeypatch.setattr("racecast.universe.Ergast", _FakeErgast)
+        return seen
+
+    def test_past_season_cache_miss_fetches_and_writes(self, monkeypatch):
+        frame = pd.DataFrame(
+            [{"round": 1, "circuitId": "monaco", "circuitName": "Circuit de Monaco"}]
+        )
+        seen = self._stub_ergast(monkeypatch, frame)
+
+        out = load_circuits(1975, current_season=2024)
+
+        assert seen == [1975]
+        assert out["circuitId"].iloc[0] == "monaco"
+        assert (self.raw / "1975" / "circuits.json").exists()
+
+    def test_past_season_reads_cache_without_calling_ergast(self, monkeypatch):
+        (self.raw / "1975").mkdir(parents=True)
+        pd.DataFrame([{"round": 1, "circuitId": "monaco"}]).to_json(
+            self.raw / "1975" / "circuits.json", orient="records"
+        )
+        seen = self._stub_ergast(monkeypatch, pd.DataFrame())
+
+        out = load_circuits(1975, current_season=2024)
+
+        assert seen == []
+        assert out["circuitId"].iloc[0] == "monaco"
+
+    def test_empty_response_is_not_cached(self, monkeypatch):
+        self._stub_ergast(monkeypatch, pd.DataFrame())
+
+        out = load_circuits(1999, current_season=2024)
+
+        assert out.empty
+        assert not (self.raw / "1999" / "circuits.json").exists()
+
+
 class TestUniverseGenerator:
     def test_last_season_defaults_to_the_current_year(self):
         gen = UniverseGenerator(first_season=2020)
@@ -273,6 +327,10 @@ class TestUniverseGenerator:
         monkeypatch.setattr(
             "racecast.universe.load_schedule",
             lambda season, *, current_season, fetch_delay: schedules[season],
+        )
+        monkeypatch.setattr(
+            "racecast.universe.load_circuits",
+            lambda season, *, current_season, fetch_delay: pd.DataFrame(),
         )
 
         units = UniverseGenerator(first_season=2020, last_season=2021).generate()

@@ -21,8 +21,11 @@ per session that has already started.
 - For each season `FIRST_SEASON…now`, load the event schedule.
   - Past seasons: read the cached `raw/<season>/schedule.json`.
   - Current season: always re-fetched (GPs get added mid-season).
-  - A fresh fetch is written to disk; that file is the only thing the universe
-    step persists.
+  - Alongside it, `raw/<season>/circuits.json` is fetched from Ergast
+    (`get_race_schedule`) — `fastf1.get_event_schedule` drops circuit identity,
+    keeping only `Country` / `Location` (a town). Ergast has the proper
+    `circuitId` slug + full name; the build step needs it, `iter_units` doesn't.
+  - Both files are the only thing the universe step persists.
 - `iter_units` walks each event's five session slots (`Session1…Session5`),
   matches the slot **name** against `SESSION_NAME_TO_TYPE`
   (`"Qualifying"→"qualifying"`, `"Race"→"race"`), and yields a Unit only once

@@ -1,17 +1,20 @@
 import fastf1
 import pandas as pd
+from fastf1.ergast import Ergast
 
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from scipy.constants import year
+
 from racecast.cache import enable_cache
 from racecast.config import (
     FIRST_SEASON,
     RAW_DIR,
     SCHEDULE_DATE_COLUMNS,
-    SCHEDULE_FETCH_DELAY,
+    FETCH_DELAY,
     SESSION_NAME_TO_TYPE,
 )
 from racecast.net import with_retries
@@ -91,6 +94,40 @@ def load_schedule(
     return _normalize_dates(schedule)
 
 
+def load_circuits(
+    season: int, *, current_season: int, fetch_delay: float = 0.0
+) -> pd.DataFrame:
+    """Ergast per-round circuit data for a season: round -> circuitId, circuitName,
+    locality, country, coords.
+
+    ``fastf1.get_event_schedule`` (used by ``load_schedule``) drops the circuit
+    identity — only ``Country`` / ``Location`` (a town) survive. Ergast keeps the
+    proper ``circuitId`` slug and full name. Cached on disk like the schedule;
+    consumed only by the build step, not by ``iter_units``.
+    """
+
+    path = RAW_DIR / str(season) / "circuits.json"
+
+    if path.exists() and season < current_season:
+        return pd.read_json(path, orient="records")
+
+    circuits = with_retries(
+        lambda: Ergast(result_type="pandas").get_race_schedule(season=season),
+        what=f"circuits {season}",
+        pre_delay=fetch_delay,
+    )
+
+    if circuits is None or circuits.empty:
+        print(f"No circuit data for season {season}; will retry next run")
+        return circuits if circuits is not None else pd.DataFrame()
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # drop the ErgastSimpleResponse subclass before serialising
+    print(f"Found circuit info for season {season}")
+    pd.DataFrame(circuits).to_json(path, orient="records", indent=2)
+    return pd.DataFrame(circuits)
+
+
 def iter_units(
     schedule: pd.DataFrame, season: int, *, now: datetime | None = None
 ) -> Iterator[Unit]:
@@ -152,7 +189,7 @@ class UniverseGenerator:
         self,
         first_season: int = FIRST_SEASON,
         last_season: int | None = None,
-        fetch_delay: float = SCHEDULE_FETCH_DELAY,
+        fetch_delay: float = FETCH_DELAY,
     ):
         current_season = datetime.now(timezone.utc).year
         self.first_season = first_season
@@ -165,6 +202,12 @@ class UniverseGenerator:
         units: list[Unit] = []
         for season in range(self.first_season, self.last_season + 1):
             schedule = load_schedule(
+                season,
+                current_season=current_season,
+                fetch_delay=self.fetch_delay,
+            )
+            # raw only — populates raw/<season>/circuits.json for the build step
+            load_circuits(
                 season,
                 current_season=current_season,
                 fetch_delay=self.fetch_delay,
