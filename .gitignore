@@ -46,6 +46,12 @@ fastf1_cache/
 cache/
 .fastf1/
 
+# ---- Tests / coverage ----
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
 # ---- Notebooks ----
 .ipynb_checkpoints/
 

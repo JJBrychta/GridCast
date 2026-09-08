@@ -28,5 +28,18 @@ packages = ["src/racecast"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra -q"
-pythonpath = ["src"]
+addopts = "-ra -q --strict-markers"
+pythonpath = ["src", "tests"]
+markers = [
+    "network: hits the real FastF1 / Ergast API (run with --run-network)",
+]
+
+[tool.coverage.run]
+source = ["racecast"]
+omit = ["*/data_pipeline.py"]  # thin CLI entrypoint
+
+[tool.coverage.report]
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "raise AssertionError\\(.unreachable.\\)",
+]
