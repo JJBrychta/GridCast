@@ -15,11 +15,13 @@ import enum
 import json
 import os
 import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import fastf1
 import pandas as pd
+from fastf1.req import Cache
 
 from racecast.cache import enable_cache
 from racecast.config import (
@@ -118,6 +120,10 @@ def fetch(universe: list[Unit]) -> dict[Outcome, int]:
     print(f"{len(universe)} units in universe, {len(todo)} to fetch")
 
     counts = {outcome: 0 for outcome in Outcome}
+    started = time.monotonic()
+    loaded = 0  # units for which we actually called the API this run
+    reqs0 = Cache._request_counter  # FastF1's running GET/POST tally
+
     for unit in todo:
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         try:
@@ -128,22 +134,44 @@ def fetch(universe: list[Unit]) -> dict[Outcome, int]:
             )
         except RateLimited as exc:
             # API said stop — bail cleanly, nothing half-written; next run resumes.
+            loaded += 1  # the throttle sleep ran before the 429
             print(f"\n{exc}\nStopping — re-run to resume from the first missing file.")
             break
         except Exception as exc:  # FastF1 raises many exception types
             # Unexpected but not fatal: leave no file so it's retried next run.
+            loaded += 1
             print(f"  {unit}  ->  error: {exc!r} (retry next run)")
             counts[Outcome.RETRY] += 1
             continue
 
+        loaded += 1
         # payload is None only for retry -> write nothing, unit stays in todo.
         outcome, payload = _decide(unit, session, now)
         if payload is not None:
             _atomic_write_json(raw_path(unit), payload)
         counts[outcome] += 1
-        print(f"  {unit}  ->  {outcome.value}")
 
+    # Statistics
+        run = time.monotonic() - started
+        reqs = Cache._request_counter - reqs0
+        rpm = reqs / (run / 60) if run else 0.0
+        print(
+            f"  {unit}  ->  {outcome.value}"
+            f"    [{loaded} loaded · {reqs} reqs · {run:.0f}s · {rpm:.0f} req/min]"
+        )
+
+    elapsed = time.monotonic() - started
+    throttle = loaded * SESSION_FETCH_DELAY
+    working = max(elapsed - throttle, 0.0)
+    total_reqs = Cache._request_counter - reqs0
     print("done: " + ", ".join(f"{o.value}={counts[o]}" for o in Outcome))
+    if loaded:
+        rpm = total_reqs / (elapsed / 60) if elapsed else 0.0
+        print(
+            f"loaded {loaded} units, {total_reqs} API requests, in {elapsed:.0f}s "
+            f"= {working:.0f}s API + {throttle:.0f}s throttle "
+            f"({working / loaded:.1f}s/unit API, {rpm:.0f} req/min)"
+        )
     return counts
 
 

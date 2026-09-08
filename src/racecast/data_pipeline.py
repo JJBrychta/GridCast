@@ -3,7 +3,7 @@ from racecast.net import RateLimited
 from racecast.universe import UniverseGenerator
 from racecast.session_loader import fetch
 from datetime import datetime
-from cache import enable_cache
+from racecast.cache import enable_cache
 
 if __name__ == "__main__":
     try:
