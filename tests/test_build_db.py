@@ -246,6 +246,130 @@ class TestPass2:
         assert conn.execute("SELECT count(*) FROM results").fetchone()[0] == 0
         assert conn.execute("SELECT count(*) FROM ingested_files").fetchone()[0] == 3  # sched+circ+quali
 
+    def test_all_rows_missing_slugs_skips_the_file_without_marking(
+        self, raw, conn, built_schedule
+    ):
+        # Ergast lag: every row has names but empty DriverId/TeamId
+        bad = _race_result("ver", 1)
+        bad["DriverId"] = bad["TeamId"] = ""
+        _write(raw, 2024, "race.json", {
+            "meta": {"season": 2024, "round": 1, "session_type": "race"},
+            "status": "ok", "results": [bad],
+        }, round_dir="round-01")
+
+        processed, _, not_ready = pass2_results(conn, built_schedule)
+
+        assert (processed, not_ready) == (0, 1)
+        assert conn.execute("SELECT count(*) FROM results").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM drivers").fetchone()[0] == 0
+        assert conn.execute(  # not marked -> retried next run
+            "SELECT count(*) FROM ingested_files WHERE raw_path LIKE '%race.json'"
+        ).fetchone()[0] == 0
+
+    def test_a_few_rows_missing_slugs_are_dropped_the_rest_loaded(
+        self, raw, conn, built_schedule
+    ):
+        good = _quali_result("max_verstappen", 1)
+        ghost = _quali_result("_", 20)          # "nan" DriverId, like an old Ergast gap
+        ghost["DriverId"] = ghost["TeamId"] = "nan"
+        _write(raw, 2024, "qualifying.json", {
+            "meta": {"season": 2024, "round": 1, "session_type": "qualifying"},
+            "status": "ok", "results": [good, ghost],
+        }, round_dir="round-01")
+
+        processed, _, not_ready = pass2_results(conn, built_schedule)
+
+        assert (processed, not_ready) == (1, 0)   # file processed + marked
+        refs = [r["driver_ref"] for r in conn.execute("SELECT driver_ref FROM drivers")]
+        assert refs == ["max_verstappen"]         # the "nan" row was dropped
+        assert conn.execute("SELECT count(*) FROM results").fetchone()[0] == 1
+
+    def test_slugless_row_is_recovered_by_name_against_a_known_driver(
+        self, raw, conn, built_schedule
+    ):
+        # round 1: Verstappen races with a proper slug -> he's now in the DB
+        _write(raw, 2024, "race.json", {
+            "meta": {"season": 2024, "round": 1, "session_type": "race"},
+            "status": "ok", "results": [_race_result("max_verstappen", 1, team="rb")],
+        }, round_dir="round-01")
+        pass2_results(conn, built_schedule)
+
+        # round 2 quali: Ergast ships his row with no DriverId/TeamId, only names
+        _write(raw, 2024, "schedule.json", [_schedule_event(1), _schedule_event(2)])
+        _write(raw, 2024, "circuits.json", [_circuit_row(1), _circuit_row(2)])
+        pass1_reference(conn, DimCache(conn))
+        ghost = _quali_result("max_verstappen", 1, team="rb")
+        ghost["DriverId"] = ghost["TeamId"] = "nan"
+        _write(raw, 2024, "qualifying.json", {
+            "meta": {"season": 2024, "round": 2, "session_type": "qualifying"},
+            "status": "ok",
+            "results": [_quali_result("gasly", 2, team="rb"), ghost],  # one good row -> file isn't "not ready"
+        }, round_dir="round-02")
+
+        processed, _, not_ready = pass2_results(conn, DimCache(conn))
+
+        assert (processed, not_ready) == (1, 0)
+        # verstappen's slugless row reused his existing driver row (gasly is the
+        # only new one); no phantom driver_ref='nan'
+        assert {r["driver_ref"] for r in conn.execute("SELECT driver_ref FROM drivers")} == \
+            {"max_verstappen", "gasly"}
+        assert [r["team_ref"] for r in conn.execute("SELECT team_ref FROM constructors")] == ["rb"]
+        got = conn.execute(
+            "SELECT d.driver_ref, c.team_ref, r.position, r.q1_ms FROM results r "
+            "JOIN drivers d ON r.driver_id = d.driver_id "
+            "JOIN constructors c ON r.constructor_id = c.constructor_id "
+            "JOIN sessions s ON r.session_id = s.session_id "
+            "WHERE s.session_type = 'qualifying' AND d.driver_ref = 'max_verstappen'"
+        ).fetchone()
+        assert (got["team_ref"], got["position"], got["q1_ms"]) == ("rb", 1, 90000)
+
+    def test_first_name_breaks_an_ambiguous_abbreviation_and_last_name(self, conn):
+        cache = DimCache(conn)
+        michael = cache.driver({"DriverId": "michael_schumacher", "FirstName": "Michael",
+                                "LastName": "Schumacher", "Abbreviation": "MSC"})
+        mick = cache.driver({"DriverId": "mick_schumacher", "FirstName": "Mick",
+                             "LastName": "Schumacher", "Abbreviation": "MSC"})
+
+        assert cache._recover_driver({"Abbreviation": "MSC", "FirstName": "Mick",
+                                      "LastName": "Schumacher", "DriverId": "nan"}) == mick
+        assert cache._recover_driver({"Abbreviation": "MSC", "FirstName": "Michael",
+                                      "LastName": "Schumacher", "DriverId": "nan"}) == michael
+        # no first name to disambiguate -> refuse
+        assert cache._recover_driver({"Abbreviation": "MSC", "LastName": "Schumacher",
+                                      "DriverId": "nan"}) is None
+
+    def test_slugless_row_with_no_match_is_still_dropped(self, raw, conn, built_schedule):
+        ghost = _quali_result("nobody", 20, team="rb")
+        ghost["DriverId"] = ghost["TeamId"] = "nan"
+        ghost["Abbreviation"], ghost["LastName"] = "ZZZ", "Nobody"  # unknown to the DB
+        _write(raw, 2024, "qualifying.json", {
+            "meta": {"season": 2024, "round": 1, "session_type": "qualifying"},
+            "status": "ok",
+            "results": [_quali_result("max_verstappen", 1), ghost],
+        }, round_dir="round-01")
+
+        processed, _, not_ready = pass2_results(conn, built_schedule)
+
+        assert (processed, not_ready) == (1, 0)
+        refs = [r["driver_ref"] for r in conn.execute("SELECT driver_ref FROM drivers")]
+        assert refs == ["max_verstappen"]
+
+    def test_ambiguous_abbreviation_needs_the_last_name_to_recover(self, conn):
+        # two drivers share "VER"; only (abbr, last name) disambiguates
+        cache = DimCache(conn)
+        cache.driver({"DriverId": "max_verstappen", "FirstName": "Max",
+                      "LastName": "Verstappen", "Abbreviation": "VER"})
+        vergne = cache.driver({"DriverId": "vergne", "FirstName": "Jean-Éric",
+                               "LastName": "Vergne", "Abbreviation": "VER"})
+
+        assert cache._recover_driver(
+            {"Abbreviation": "VER", "LastName": "Verstappen", "DriverId": "nan"}
+        ) == cache._driver["max_verstappen"][0]
+        # "VER" + "Vergne" is just as specific
+        assert cache._recover_driver(
+            {"Abbreviation": "VER", "LastName": "Vergne", "DriverId": "nan"}
+        ) == vergne
+
     def test_session_file_without_a_schedule_is_skipped_not_marked(self, raw, conn):
         _write(raw, 2024, "race.json", {
             "meta": {"season": 2024, "round": 1, "session_type": "race"},

@@ -207,7 +207,12 @@ class DimCache:
 
     def driver(self, rec: dict) -> int:
         """`rec` is one entry of a session file's ``results`` array."""
-        ref = rec["DriverId"]
+        ref = rec.get("DriverId")
+        if not _valid_ref(ref):
+            recovered = self._recover_driver(rec)
+            if recovered is not None:
+                return recovered
+            raise ValueError(f"unusable DriverId {ref!r} for {rec.get('LastName')!r}")
         fields = (
             rec.get("FirstName") or None,
             rec.get("LastName") or None,
@@ -233,8 +238,42 @@ class DimCache:
         self._driver[ref] = (row["driver_id"], fields)
         return row["driver_id"]
 
+    def _recover_driver(self, rec: dict) -> int | None:
+        """A result row with no ``DriverId`` slug — Ergast occasionally ships one
+        for a single driver at a single (usually recent) session. The row still
+        carries the abbreviation and name, so match it to a driver already in the
+        DB by ``(abbreviation, last name)`` — queried live, so it finds drivers
+        loaded earlier this run *or* by a previous build. ``"VER"`` alone is
+        shared by Verstappen and Vergne, hence the last name too. Returns None
+        when there's no row or more than one; the caller then drops the row.
+        """
+        abbr = (rec.get("Abbreviation") or "").strip()
+        last = (rec.get("LastName") or "").strip()
+        first = (rec.get("FirstName") or "").strip()
+        if not abbr or not last:
+            return None
+        hits = self.conn.execute(
+            "SELECT driver_id, first_name FROM drivers "
+            "WHERE abbreviation = ? COLLATE NOCASE AND last_name = ? COLLATE NOCASE",
+            (abbr, last),
+        ).fetchall()
+        if len(hits) == 1:
+            return hits[0]["driver_id"]
+        # abbreviation + last name isn't unique (Michael vs Mick Schumacher, both
+        # "MSC") — the first name breaks the tie.
+        if len(hits) > 1 and first:
+            named = [h for h in hits if (h["first_name"] or "").lower() == first.lower()]
+            if len(named) == 1:
+                return named[0]["driver_id"]
+        return None
+
     def constructor(self, rec: dict) -> int:
-        ref = rec["TeamId"]
+        ref = rec.get("TeamId")
+        if not _valid_ref(ref):
+            recovered = self._recover_constructor(rec)
+            if recovered is not None:
+                return recovered
+            raise ValueError(f"unusable TeamId {ref!r} for {rec.get('TeamName')!r}")
         name = rec.get("TeamName") or None
         cached = self._constructor.get(ref)
         if cached is not None:
@@ -252,6 +291,21 @@ class DimCache:
         ).fetchone()
         self._constructor[ref] = (row["constructor_id"], name)
         return row["constructor_id"]
+
+    def _recover_constructor(self, rec: dict) -> int | None:
+        """As _recover_driver, for a row with no ``TeamId`` slug: match the
+        verbatim ``TeamName`` against a constructor already in the DB. None when
+        there's no row or more than one (e.g. "Racing Point" currently names two
+        constructor rows — Force India and the later team).
+        """
+        name = (rec.get("TeamName") or "").strip()
+        if not name:
+            return None
+        hits = self.conn.execute(
+            "SELECT constructor_id FROM constructors WHERE name = ? COLLATE NOCASE",
+            (name,),
+        ).fetchall()
+        return hits[0]["constructor_id"] if len(hits) == 1 else None
 
 
 # --------------------------------------------------------------------------- #
@@ -488,6 +542,25 @@ def _upsert_weather(conn: sqlite3.Connection, session_id: int, agg: dict) -> Non
     )
 
 
+_BAD_REFS = {"", "nan", "none", "null"}
+
+
+def _valid_ref(value) -> bool:
+    """A usable natural key: a non-empty string that isn't a stringified null.
+
+    FastF1's results DataFrame carries missing DriverId/TeamId as NaN, which
+    ``to_json`` can serialise as the literal string ``"nan"`` — truthy, so it
+    would sail into the DB as ``driver_ref='nan'`` without this check.
+    """
+    return isinstance(value, str) and value.strip().lower() not in _BAD_REFS
+
+
+def _has_usable_row(results: list[dict]) -> bool:
+    """At least one result row we can actually load. If none, the whole session
+    isn't in Ergast yet -> skip and retry rather than mark it done with 0 rows."""
+    return any(_valid_ref(r.get("DriverId")) and _valid_ref(r.get("TeamId")) for r in results)
+
+
 def _lookup_session(
     conn: sqlite3.Connection, season: int, rnd: int, session_type: str
 ) -> int | None:
@@ -509,8 +582,8 @@ def _lookup_session(
 
 def pass2_results(conn: sqlite3.Connection, cache: DimCache) -> tuple[int, int, int]:
     """Load every ``raw/<season>/round-NN/*.json``. Returns
-    (processed, skipped-unchanged, skipped-no-schedule)."""
-    processed = skipped = missing = 0
+    (processed, skipped-unchanged, skipped-not-ready)."""
+    processed = skipped = not_ready = 0
 
     for path in sorted(RAW_DIR.glob("*/round-*/*.json")):
         content_hash = _sha256(path)
@@ -527,15 +600,41 @@ def pass2_results(conn: sqlite3.Connection, cache: DimCache) -> tuple[int, int, 
             # Its schedule hasn't been built yet (shouldn't happen — the universe
             # writes schedules before emitting units). NOT marked ingested, so
             # it's retried on the next run once pass 1 catches up.
-            missing += 1
+            not_ready += 1
             print(paint(f"  [skip] no session row for {_rel(path)}", "yellow"))
+            continue
+
+        rows = doc.get("results", []) if doc.get("status") == "ok" else []
+        if doc.get("status") == "ok" and rows and not _has_usable_row(rows):
+            # Every row lacks a slug -> Ergast hasn't populated this session yet.
+            # NOT marked ingested, so it's retried; re-fetching the file also fixes it.
+            not_ready += 1
+            print(paint(f"  [skip] no usable rows (missing DriverId/TeamId) in {_rel(path)}", "yellow"))
             continue
 
         try:  # one transaction per file
             if doc.get("status") == "ok":
-                for r in doc.get("results", []):
-                    driver_id = cache.driver(r)
-                    constructor_id = cache.constructor(r)
+                for r in rows:
+                    # A few rows can still be missing slugs (an Ergast gap for a
+                    # single driver at one session). DimCache tries to recover
+                    # the row by matching name/abbreviation against a driver /
+                    # constructor already loaded; if it can't, it raises and we
+                    # drop just that row and keep the rest.
+                    had_slug = _valid_ref(r.get("DriverId")) and _valid_ref(r.get("TeamId"))
+                    try:
+                        driver_id = cache.driver(r)
+                        constructor_id = cache.constructor(r)
+                    except ValueError:
+                        print(paint(
+                            f"  [drop row] {_rel(path)}: {r.get('FirstName')} "
+                            f"{r.get('LastName')} (no slug, no match)", "yellow",
+                        ))
+                        continue
+                    if not had_slug:
+                        print(paint(
+                            f"  [recovered] {_rel(path)}: {r.get('FirstName')} "
+                            f"{r.get('LastName')} matched by name", "cyan",
+                        ))
                     _upsert_result(conn, _result_values(
                         session_id, session_type, driver_id, constructor_id, r
                     ))
@@ -552,7 +651,7 @@ def pass2_results(conn: sqlite3.Connection, cache: DimCache) -> tuple[int, int, 
             conn.rollback()
             print(paint(f"  [error] {_rel(path)}: {exc!r}", "red"))
 
-    return processed, skipped, missing
+    return processed, skipped, not_ready
 
 
 # --------------------------------------------------------------------------- #
@@ -575,10 +674,10 @@ def build() -> None:
     p1_done, p1_skip = pass1_reference(conn, cache)
     print(paint(f"pass 1 (schedules): {p1_done} processed, {p1_skip} unchanged", "cyan"))
 
-    p2_done, p2_skip, p2_missing = pass2_results(conn, cache)
+    p2_done, p2_skip, p2_not_ready = pass2_results(conn, cache)
     line = f"pass 2 (results): {p2_done} processed, {p2_skip} unchanged"
-    if p2_missing:
-        line += f", {p2_missing} skipped (no schedule)"
+    if p2_not_ready:
+        line += f", {p2_not_ready} not ready (retried next run)"
     print(paint(line, "cyan"))
 
     print(paint("db: " + _row_counts(conn), "bold"))

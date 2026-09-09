@@ -96,6 +96,26 @@ Idempotent, resumable:
 - Pass 2 looks up `event_id` / `session_id` from the DB (built by pass 1, this
   run or a previous one). A session file whose schedule isn't built yet is
   skipped **without** being marked, so it's retried next run.
+- **Missing slugs.** Ergast sometimes ships a result with no `DriverId`/`TeamId`
+  (a whole quali not populated yet, or one driver missing from a session).
+  `"nan"` (a stringified NaN from `to_json`) counts as missing, not a real ref.
+  - *All* rows bad → skip the file unmarked (retry).
+  - *A few* rows bad → try to recover each: match the row's
+    `(Abbreviation, LastName)` — then `+ FirstName` if that's still ambiguous
+    (`MSC`/`Schumacher` is Michael *and* Mick) — against a driver already in the
+    DB, and its `TeamName` against a known constructor. The lookup is a live
+    query, so it finds entities loaded earlier this run *or* by a previous
+    build. A recovered row loads normally (`[recovered] … matched by name`); one
+    with no unambiguous match is dropped (`[drop row] … no slug, no match`) and
+    the rest of the file still loads.
+  - Recovery works because the driver/constructor is almost always already in
+    the DB from another session where Ergast *did* have the slug — e.g.
+    `2026/round-01/qualifying.json` lists Verstappen/Sainz/Stroll with
+    `DriverId: "nan"`, but all three raced 2024–25 with proper slugs.
+  - In this archive a missing slug goes hand in hand with a missing everything
+    else — these Ergast stub rows carry the name but no `Position` / `Q1‥Q3`,
+    so a recovered row is a *participation* record (driver + constructor +
+    session, timing columns NULL), not recovered lap times.
 
 ~37 k `results` rows for 1950–now; a full rebuild is a few seconds.
 
