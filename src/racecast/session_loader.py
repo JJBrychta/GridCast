@@ -6,9 +6,11 @@ raw file is either fully present or absent — never half-written. On a rate lim
 the run stops cleanly; re-running resumes from the first missing file.
 
 Outcome per unit:
-  ok       results present             -> write {status: "ok", results: [...]}
+  ok       results present             -> write {status: "ok", results: [...], weather: [...]}
   no_data  empty + session is old      -> write {status: "no_data", results: []}
   retry    empty + future / too recent -> write nothing, picked up next run
+
+``weather`` is the per-minute timeseries, verbatim; [] for pre-2018 seasons.
 """
 
 import enum
@@ -25,9 +27,12 @@ from fastf1.req import Cache
 
 from racecast.cache import enable_cache
 from racecast.config import (
+    FIRST_SEASON,
+    RAW_DIR,
     RESULTS_LAG_DAYS,
     SESSION_FETCH_DELAY,
-    SESSION_TYPE_TO_NAME, FIRST_SEASON,
+    SESSION_TYPE_TO_NAME,
+    WEATHER_FROM_SEASON,
 )
 from racecast._console import clear_status, paint, status
 from racecast.net import RateLimited, with_retries
@@ -48,10 +53,16 @@ _OUTCOME_STYLE: dict[Outcome, tuple[str, ...]] = {
 
 
 def _load_session(unit: Unit):
-    """get_session + results-only load. Returns the loaded Session."""
+    """get_session + a minimal load: results always, weather for 2018+ seasons
+    (earlier ones have none — don't waste the request). Returns the Session."""
     name = SESSION_TYPE_TO_NAME[unit.session_type]
     session = fastf1.get_session(unit.season, unit.round, name)
-    session.load(laps=False, telemetry=False, weather=False, messages=False)
+    session.load(
+        laps=False,
+        telemetry=False,
+        weather=unit.season >= WEATHER_FROM_SEASON,
+        messages=False,
+    )
     return session
 
 
@@ -69,14 +80,22 @@ def _session_start(unit: Unit, session) -> pd.Timestamp | None:
     return pd.Timestamp(ts) if not pd.isna(ts) else None
 
 
-def _results_records(results: pd.DataFrame) -> list[dict]:
-    """Every column of session.results, verbatim — one record per driver.
+def _records(frame: pd.DataFrame) -> list[dict]:
+    """DataFrame -> one dict per row, verbatim. No column selection — that's the
+    build step's job. to_json handles NaN/NaT -> null and timedeltas -> ms."""
+    return json.loads(frame.reset_index(drop=True).to_json(orient="records"))
 
-    No column selection here: that's the build step's job. The raw layer exists
-    precisely so deciding we want a field later never means re-scraping.
-    to_json handles NaN/NaT -> null; timedeltas (Q1/Q2/Q3, Time) -> milliseconds.
-    """
-    return json.loads(results.reset_index(drop=True).to_json(orient="records"))
+
+def _weather_records(session) -> list[dict]:
+    """Per-minute weather timeseries, verbatim. ``[]`` when weather wasn't loaded
+    (pre-2018 seasons) or the session simply has none."""
+    try:
+        weather = session.weather_data
+    except Exception:
+        return []  # DataNotLoadedError etc. — weather is optional
+    if weather is None or len(weather) == 0:
+        return []
+    return _records(weather)
 
 
 def _atomic_write_json(path: Path, payload: dict) -> None:
@@ -106,7 +125,8 @@ def _decide(unit: Unit, session, now: datetime) -> tuple[Outcome, dict | None]:
         return Outcome.OK, {
             "meta": meta,
             "status": "ok",
-            "results": _results_records(results),
+            "results": _records(results),
+            "weather": _weather_records(session),
         }
 
     # Empty results. If the session is old enough that data would exist by now,
@@ -199,6 +219,65 @@ def fetch(universe: list[Unit]) -> dict[Outcome, int]:
     return counts
 
 
+def backfill_weather() -> int:
+    """One-off: add the ``weather`` key to ``ok`` raw files that were fetched
+    before weather support existed (2018+ only). Idempotent — files that already
+    have the key are skipped, so it resumes after a rate-limit stop.
+    """
+    enable_cache()
+
+    todo: list[tuple[Path, dict]] = []
+    for path in sorted(RAW_DIR.glob("*/round-*/*.json")):
+        try:
+            season = int(path.parts[-3])
+        except ValueError:
+            continue
+        if season < WEATHER_FROM_SEASON:
+            continue
+        doc = json.loads(path.read_text())
+        if doc.get("status") == "ok" and "weather" not in doc:
+            todo.append((path, doc))
+
+    print(f"{len(todo)} ok files (2018+) missing weather")
+    done = 0
+    for path, doc in todo:
+        meta = doc["meta"]
+        unit = Unit(meta["season"], meta["round"], meta["session_type"])
+        status(paint(f"  {unit}  …  ({SESSION_FETCH_DELAY:.0f}s throttle + fetch)", "dim"))
+        try:
+            session = with_retries(
+                lambda: _load_session(unit),
+                what=f"weather {unit}",
+                pre_delay=SESSION_FETCH_DELAY,
+            )
+        except RateLimited as exc:
+            clear_status()
+            print(paint(f"\n{exc}\nStopping — re-run to continue.", "red", "bold"))
+            break
+        except Exception as exc:  # noqa: BLE001 — leave the file untouched, retry next run
+            clear_status()
+            print(f"  {unit}  ->  {paint('error', 'red')}: {exc!r}")
+            continue
+
+        doc["weather"] = _weather_records(session)
+        _atomic_write_json(path, doc)
+        done += 1
+        clear_status()
+        n = len(doc["weather"])
+        tag = paint(f"+{n} rows" if n else "no weather", "green" if n else "yellow")
+        print(f"  {unit}  ->  {tag}    {paint(f'[{done}/{len(todo)}]', 'dim')}")
+
+    print(paint(f"done: {done}/{len(todo)} files updated", "bold"))
+    return done
+
+
 if __name__ == "__main__":
-    universe = UniverseGenerator(first_season=2025, last_season=2025).generate()
-    fetch(universe)
+    import sys
+
+    if "--weather" in sys.argv:
+        backfill_weather()
+    else:
+        universe = UniverseGenerator(
+            first_season=FIRST_SEASON, last_season=datetime.now().year
+        ).generate()
+        fetch(universe)

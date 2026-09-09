@@ -36,3 +36,8 @@ SESSION_TYPE_TO_NAME = {slug: name for name, slug in SESSION_NAME_TO_TYPE.items(
 # session is older than this. Inside the window it's treated as "official
 # results not posted yet" -> retry next run.
 RESULTS_LAG_DAYS = 3
+
+# Weather data comes from the F1 live-timing API, which FastF1 supports from
+# 2018. For earlier seasons we don't ask (no wasted request) and the raw file's
+# "weather" key is [].
+WEATHER_FROM_SEASON = 2018

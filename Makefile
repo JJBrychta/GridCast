@@ -1,4 +1,4 @@
-.PHONY: pipeline universe fetch clean-raw clean-cache clean
+.PHONY: pipeline universe fetch backfill-weather clean-raw clean-cache clean
 
 # Build the universe (1950 -> current season) and cache season schedules.
 pipeline:
@@ -11,6 +11,10 @@ universe:
 # Step 2: download raw session results for units not yet on disk.
 fetch:
 	uv run python -m racecast.session_loader
+
+# One-off: add the weather key to ok files fetched before weather support (2018+).
+backfill-weather:
+	uv run python -m racecast.session_loader --weather
 
 # Wipe raw/ but keep dotfiles (.gitkeep).
 clean-raw:

@@ -47,17 +47,22 @@ A unit is **done** iff `raw/<season>/round-NN/<session_type>.json` exists. No
 ledger, no status DB — the filesystem *is* the resume state.
 
 For each `todo` unit: `get_session(...).load(laps=False, telemetry=False,
-weather=False, messages=False)` (results only), then classify:
+weather=<season≥2018>, messages=False)`, then classify:
 
 | Outcome | Condition | Writes |
 |---|---|---|
-| `ok` | results present | `{meta, status:"ok", results:[…]}` |
+| `ok` | results present | `{meta, status:"ok", results:[…], weather:[…]}` |
 | `no_data` | empty **and** session older than `RESULTS_LAG_DAYS` | `{meta, status:"no_data", results:[]}` marker |
 | `retry` | empty and future / within the results-posting lag | nothing — retried next run |
 
 - **All result columns are stored verbatim.** Column selection is the build
   step's job. Deciding later that we want a field we didn't parse never means
   re-scraping — and the FastF1 HTTP cache sits under that as a second backstop.
+- **`weather`** is the per-minute timeseries (`session.weather_data`), verbatim.
+  `[]` for pre-`WEATHER_FROM_SEASON` (2018) sessions — no request is made for
+  those. The build step aggregates it to a `session_weather` row.
+  `ok` files fetched *before* weather support lack the key — `make backfill-weather`
+  re-loads only those 2018+ sessions and adds it (idempotent, rate-limit-safe).
 - Writes are atomic (`tempfile` + `os.replace`): a raw file is complete or
   absent, never partial.
 - The `no_data` marker matters because Ergast genuinely has no qualifying data
@@ -216,11 +221,12 @@ stop, atomic writes).
 ## Running
 
 ```bash
-make pipeline      # universe -> session_loader, 1950 -> current season
-make fetch         # session_loader only
-make universe      # universe only
-make clean-raw     # wipe raw/ (keeps .gitkeep)   — WARNING: discards fetched data
-make clean-cache   # wipe fastf1_cache/
+make pipeline           # universe -> session_loader, 1950 -> current season
+make fetch              # session_loader only
+make universe           # universe only
+make backfill-weather   # add weather to ok files fetched before weather support
+make clean-raw          # wipe raw/ (keeps .gitkeep)   — WARNING: discards fetched data
+make clean-cache        # wipe fastf1_cache/
 ```
 
 The backfill takes many runs (rate limits). Each run re-derives the universe

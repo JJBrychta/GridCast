@@ -61,11 +61,24 @@ def event_for(session_type: str, started: datetime, *, name: str = "Test GP") ->
 
 
 class FakeSession:
-    """Stand-in for ``fastf1.core.Session`` — only ``.results`` and ``.event``."""
+    """Stand-in for ``fastf1.core.Session`` — ``.results``, ``.event``, and a
+    lazy ``.weather_data`` that raises when unset (mimics DataNotLoadedError)."""
 
-    def __init__(self, results: pd.DataFrame | None, event: dict | None = None):
+    def __init__(
+        self,
+        results: pd.DataFrame | None,
+        event: dict | None = None,
+        weather: pd.DataFrame | None = None,
+    ):
         self.results = results
         self.event = event if event is not None else {"EventName": "Test GP"}
+        self._weather = weather
+
+    @property
+    def weather_data(self) -> pd.DataFrame:
+        if self._weather is None:
+            raise RuntimeError("weather data not loaded")
+        return self._weather
 
 
 def raises(exc: BaseException):
