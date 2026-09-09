@@ -5,6 +5,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RAW_DIR = REPO_ROOT / "raw"
 FASTF1_CACHE = REPO_ROOT / "fastf1_cache"
 
+# Derived DB — built from raw/ by build_db.py. Disposable: rm it and rebuild.
+DB_PATH = REPO_ROOT / "data" / "racecast.sqlite"
+
 # F1 world championship began in 1950 — the earliest season with any data.
 FIRST_SEASON = 1950
 

@@ -1,4 +1,4 @@
-.PHONY: pipeline universe fetch backfill-weather clean-raw clean-cache clean
+.PHONY: pipeline universe fetch backfill-weather init-db build-db clean-raw clean-cache clean-db clean
 
 # Build the universe (1950 -> current season) and cache season schedules.
 pipeline:
@@ -16,6 +16,14 @@ fetch:
 backfill-weather:
 	uv run python -m racecast.session_loader --weather
 
+# Create data/racecast.sqlite with the schema applied (safe to re-run).
+init-db:
+	uv run python -m racecast.db
+
+# Step 3: build data/racecast.sqlite from raw/ (idempotent — only new/changed files).
+build-db:
+	uv run python -m racecast.build_db
+
 # Wipe raw/ but keep dotfiles (.gitkeep).
 clean-raw:
 	find raw -mindepth 1 -maxdepth 1 ! -name '.*' -exec rm -rf {} +
@@ -24,4 +32,8 @@ clean-raw:
 clean-cache:
 	find fastf1_cache -mindepth 1 -maxdepth 1 ! -name '.*' -exec rm -rf {} +
 
-clean: clean-raw clean-cache
+# Drop the derived DB (rebuild it from raw/ with build_db.py).
+clean-db:
+	rm -f data/racecast.sqlite
+
+clean: clean-raw clean-cache clean-db

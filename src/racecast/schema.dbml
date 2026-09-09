@@ -1,147 +1,102 @@
-// RaceCast — normalized SQLite schema (build step output).
+// RaceCast — derived SQLite schema (see schema.sql for the authoritative DDL).
 // Paste into https://dbdiagram.io to view.
+//
+// The DB is a faithful, rebuildable mirror of raw/ — no aggregation (beyond
+// `dnf` + the weather rollup), no training-window filter. That's the feature step.
 //
 // Data source per column:
 //   [raw]     verbatim from a raw/ JSON field
-//   [derived] computed by build.py from raw fields
-//   [ergast]  from raw/<season>/circuits.json (Ergast get_race_schedule)
+//   [derived] computed by build_db.py
+//   [ergast]  from raw/<season>/circuits.json
 //   [todo]    NOT in raw yet — needs an extra fetch, left out for now
-//
-// The DB is a faithful, rebuildable mirror of raw/ — no aggregation, no
-// training-window filter. That happens later in the feature step.
-
-Enum session_type {
-  fp1
-  fp2
-  fp3
-  qualifying
-  sprint_qualifying   // "Sprint Qualifying" / "Sprint Shootout"
-  sprint
-  race
-}
-
-Enum event_format {
-  conventional
-  sprint
-  sprint_shootout
-  testing
-}
-
 
 Table seasons {
   season_id  int  [pk, increment]
   year       int  [not null, unique, note: '[raw] folder / meta.season']
 }
 
-
 Table circuits {
-  circuit_id   int      [pk, increment]
-  circuit_ref  varchar  [not null, unique, note: '[ergast] circuitId slug: "monza", "spa"']
-  name         varchar  [not null, note: '[ergast] circuitName']
-  locality     varchar  [note: '[ergast]']
-  country      varchar  [note: '[ergast]']
-  lat          float    [note: '[ergast]']
-  long         float    [note: '[ergast]']
+  circuit_id   int    [pk, increment]
+  circuit_ref  varchar [not null, unique, note: '[ergast] circuitId slug: "monza", "spa"']
+  name         varchar [not null, note: '[ergast] circuitName']
+  locality     varchar [note: '[ergast]']
+  country      varchar [note: '[ergast]']
+  lat          float   [note: '[ergast]']
+  long         float   [note: '[ergast]']
 }
-
 
 Table events {
-  event_id       int           [pk, increment]
-  season_id      int           [not null, ref: > seasons.season_id]
-  round_number   int           [not null, note: '[raw] schedule.RoundNumber']
-  circuit_id     int           [not null, ref: > circuits.circuit_id, note: 'matched by round via circuits.json']
-  event_name     varchar       [not null, note: '[raw] schedule.EventName']
-  official_name  varchar       [note: '[raw] schedule.OfficialEventName']
-  event_format   event_format  [note: '[raw] schedule.EventFormat']
-  event_date     date          [note: '[raw] schedule.EventDate']
-  country        varchar       [note: '[raw] schedule.Country']
-  location       varchar       [note: '[raw] schedule.Location — host town, not the circuit']
-
-  indexes {
-    (season_id, round_number) [unique]
-  }
+  event_id       int     [pk, increment]
+  season_id      int     [not null, ref: > seasons.season_id]
+  round_number   int     [not null, note: '[raw] schedule.RoundNumber']
+  circuit_id     int     [ref: > circuits.circuit_id, note: 'nullable — a failed circuits fetch must not block the event']
+  event_name     varchar [not null, note: '[raw] schedule.EventName']
+  official_name  varchar [note: '[raw] schedule.OfficialEventName']
+  event_format   varchar [note: '[raw] schedule.EventFormat, verbatim (labels vary by era)']
+  event_date     date    [note: '[raw] schedule.EventDate']
+  country        varchar [note: '[raw] schedule.Country']
+  location       varchar [note: '[raw] schedule.Location — host town, not the circuit']
+  indexes { (season_id, round_number) [unique] }
 }
 
-
-// One row per real session slot in schedule.json (Session1..5, skipping None),
-// name mapped through SESSION_NAME_TO_TYPE. Exists even for sessions we have no
-// results for yet (FP1..3, sprint) so adding them later is just a new results
-// table, no backfill of this one.
+// One row per real session slot in schedule.json, name -> slug via
+// SESSION_NAME_TO_TYPE. Only qualifying/race today; the CHECK allows the rest so
+// adding practices/sprints is a build change, not a migration.
 Table sessions {
-  session_id     int           [pk, increment]
-  event_id       int           [not null, ref: > events.event_id]
-  session_type   session_type  [not null, note: '[derived] SessionN name -> slug']
-  session_date   timestamp     [note: '[raw] schedule.SessionNDateUtc']
-
-  indexes {
-    (event_id, session_type) [unique]
-  }
+  session_id    int       [pk, increment]
+  event_id      int       [not null, ref: > events.event_id]
+  session_type  varchar   [not null, note: 'fp1/fp2/fp3/qualifying/sprint_qualifying/sprint/race']
+  session_date  timestamp [note: '[raw] schedule.SessionNDateUtc']
+  indexes { (event_id, session_type) [unique] }
 }
-
 
 Table constructors {
-  constructor_id  int      [pk, increment]
-  team_ref        varchar  [not null, unique, note: '[raw] results.TeamId slug: "red_bull"']
-  name            varchar  [not null, note: '[raw] results.TeamName']
-  // nationality  varchar  [todo] Ergast get_constructor_info()
+  constructor_id  int     [pk, increment]
+  team_ref        varchar [not null, unique, note: '[raw] results.TeamId slug']
+  name            varchar [not null, note: '[raw] results.TeamName — last write wins']
 }
-
 
 Table drivers {
-  driver_id     int      [pk, increment]
-  driver_ref    varchar  [not null, unique, note: '[raw] results.DriverId slug: "max_verstappen"']
-  first_name    varchar  [note: '[raw] results.FirstName']
-  last_name     varchar  [note: '[raw] results.LastName']
-  abbreviation  varchar  [note: '[raw] results.Abbreviation — empty for pre-~1980 drivers']
-  country_code  varchar  [note: '[raw] results.CountryCode — e.g. NED, empty for old drivers']
-  // nationality varchar [todo] Ergast get_driver_info() — full "Dutch"
+  driver_id     int     [pk, increment]
+  driver_ref    varchar [not null, unique, note: '[raw] results.DriverId slug: "max_verstappen"']
+  first_name    varchar [note: '[raw] — last write wins']
+  last_name     varchar [note: '[raw]']
+  abbreviation  varchar [note: '[raw] results.Abbreviation — empty for pre-~1980 drivers']
+  country_code  varchar [note: '[raw] results.CountryCode — empty for old drivers']
+  // nationality [todo] Ergast get_driver_info() — full "Dutch"
 }
 
+// One row per driver per session. Race columns are null on qualifying rows and
+// vice-versa. session_type is denormalised from sessions so "all race results"
+// needs no join. Sprint / sprint_qualifying will reuse these same columns.
+Table results {
+  result_id            int     [pk, increment]
+  session_id           int     [not null, ref: > sessions.session_id]
+  session_type         varchar [not null]
+  driver_id            int     [not null, ref: > drivers.driver_id]
+  constructor_id       int     [not null, ref: > constructors.constructor_id]
+  driver_number        int     [note: '[raw] results.DriverNumber']
+  position             int     [note: '[raw] results.Position — finish order (race) / classification (quali)']
 
-Table race_results {
-  result_id            int      [pk, increment]
-  session_id           int      [not null, ref: > sessions.session_id]
-  driver_id            int      [not null, ref: > drivers.driver_id]
-  constructor_id       int      [not null, ref: > constructors.constructor_id]
-  driver_number        int      [note: '[raw] results.DriverNumber — the number raced that weekend']
-  position             int      [note: '[raw] results.Position — finishing order, null for DNS']
-  classified_position  varchar  [note: '[raw] results.ClassifiedPosition — "1".."20" / R / D / W / N']
-  grid_position        int      [note: '[raw] results.GridPosition']
-  status               varchar  [note: '[raw] results.Status — Finished / Lapped / Retired / Accident / Disqualified / Did not start']
-  dnf                  boolean  [note: '[derived] classified_position is not a plain integer']
-  points               float    [note: '[raw] results.Points']
-  laps                 int      [note: '[raw] results.Laps — laps completed']
-  time_ms              int      [note: '[raw] results.Time — race time / gap to leader, ms']
-  // fastest_lap_rank  int      [todo] not in session.results; needs Ergast get_race_results()
+  classified_position  varchar [note: '[raw] race only — "1".."20" / R / D / W / N']
+  grid_position        int     [note: '[raw] race only']
+  status               varchar [note: '[raw] race only — Finished / Lapped / Retired / Accident / ...']
+  dnf                  boolean [note: '[derived] race only — classified_position is not a plain integer']
+  points               float   [note: '[raw] race only']
+  laps                 int     [note: '[raw] race only — laps completed']
+  time_ms              int     [note: '[raw] race only — race time / gap to leader']
 
-  indexes {
-    (session_id, driver_id) [unique]
-  }
+  q1_ms                int     [note: '[raw] qualifying only']
+  q2_ms                int     [note: '[raw] qualifying only — null if out in Q1']
+  q3_ms                int     [note: '[raw] qualifying only — null if out in Q2']
+
+  indexes { (session_id, driver_id) [unique] }
 }
 
-
-Table qualifying_results {
-  result_id       int      [pk, increment]
-  session_id      int      [not null, ref: > sessions.session_id]
-  driver_id       int      [not null, ref: > drivers.driver_id]
-  constructor_id  int      [not null, ref: > constructors.constructor_id]
-  driver_number   int      [note: '[raw] results.DriverNumber']
-  position        int      [note: '[raw] results.Position — final quali classification']
-  q1_ms           int      [note: '[raw] results.Q1 — best Q1 lap, ms']
-  q2_ms           int      [note: '[raw] results.Q2 — null if knocked out in Q1']
-  q3_ms           int      [note: '[raw] results.Q3 — null if knocked out in Q2']
-
-  indexes {
-    (session_id, driver_id) [unique]
-  }
-}
-
-
-// 2018+ only (F1 live-timing API). Aggregated by build.py from the per-minute
-// session.weather_data timeseries stored in the raw file. No row for pre-2018
-// sessions -> feature step LEFT JOINs, old races get NULL weather.
+// 2018+ only. Aggregated by build_db.py from the per-minute weather timeseries
+// in the raw file. No row for sessions without weather.
 Table session_weather {
-  session_id      int      [pk, ref: - sessions.session_id]
+  session_id      int     [pk, ref: - sessions.session_id]
   air_temp_min    float
   air_temp_avg    float
   air_temp_max    float
@@ -152,15 +107,14 @@ Table session_weather {
   pressure_avg    float
   wind_speed_avg  float
   wind_speed_max  float
-  rainfall_any    boolean  [note: '[derived] did Rainfall flag true at any point']
-  rainfall_pct    float    [note: '[derived] 0-100, share of the session with rain flagged']
+  rainfall_any    boolean [note: '[derived]']
+  rainfall_pct    float   [note: '[derived] 0-100, share of the session with rain flagged']
 }
 
-
 // Build checkpoint — which raw files (at which hash) are already loaded.
-// Lives in this DB on purpose: drop the DB, lose the ledger, full rebuild.
+// Lives in this DB: drop the DB, lose the ledger, full rebuild.
 Table ingested_files {
-  raw_path      varchar    [pk]
-  content_hash  varchar    [not null]
-  ingested_at   timestamp  [not null]
+  raw_path      varchar   [pk]
+  content_hash  varchar   [not null]
+  ingested_at   timestamp [not null]
 }

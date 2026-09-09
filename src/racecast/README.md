@@ -1,11 +1,11 @@
 # RaceCast — data scraping layer
 
-Pulls F1 results from the FastF1 / Ergast(Jolpica) APIs into a local `raw/` archive
-that later steps turn into a training dataset. Two steps today:
+Pulls F1 results from the FastF1 / Ergast(Jolpica) APIs into a local `raw/` archive,
+then mirrors it into a queryable SQLite DB. Feature engineering is a later step.
 
 ```
-universe  ──►  session_loader  ──►  (build step, later)
-schedules      raw/**/*.json         SQLite / features
+universe  ──►  session_loader  ──►  build_db  ──►  (features / model)
+schedules      raw/**/*.json         data/racecast.sqlite
 ```
 
 Everything is resumable: kill it, hit a rate limit, Ctrl-C — nothing is left
@@ -68,6 +68,36 @@ weather=<season≥2018>, messages=False)`, then classify:
 - The `no_data` marker matters because Ergast genuinely has no qualifying data
   before ~2003 (~800 units). Without the marker those re-fetch on every run
   forever and the backfill never "completes".
+
+---
+
+## Step 3 — Build (`build_db.py`)
+
+Mirrors `raw/` into `data/racecast.sqlite` (schema in `schema.sql` / `schema.dbml`).
+A faithful, disposable copy — no aggregation beyond `dnf` and the weather rollup,
+no training-window filter. `make clean-db && make build-db` is the "migration".
+
+Two passes:
+
+1. **`raw/<season>/schedule.json` + `circuits.json`** → `seasons`, `circuits`,
+   `events`, `sessions` (qualifying + race rows only)
+2. **`raw/<season>/round-NN/*.json`** → `drivers`, `constructors`, `results`
+   (one table, `session_type`-discriminated), `session_weather` (aggregated from
+   the per-minute `weather` array; 2018+ only)
+
+Idempotent, resumable:
+
+- **`ingested_files(raw_path, content_hash)`** ledger — a file is reprocessed
+  only if new or its hash changed (provisional→official re-fetch, weather
+  backfill, a new GP in the current schedule). One transaction per file.
+- **`DimCache`** — `{ref → id}` maps loaded once; entity names are last-write-wins
+  but only written when they actually change.
+- `dnf` = `classified_position` is a letter code (`R`/`D`/`W`/`N`), not a number.
+- Pass 2 looks up `event_id` / `session_id` from the DB (built by pass 1, this
+  run or a previous one). A session file whose schedule isn't built yet is
+  skipped **without** being marked, so it's retried next run.
+
+~37 k `results` rows for 1950–now; a full rebuild is a few seconds.
 
 ---
 
@@ -225,6 +255,9 @@ make pipeline           # universe -> session_loader, 1950 -> current season
 make fetch              # session_loader only
 make universe           # universe only
 make backfill-weather   # add weather to ok files fetched before weather support
+make build-db              # step 3: raw/ -> data/racecast.sqlite (idempotent)
+make init-db            # just create the empty DB with the schema
+make clean-db           # rm data/racecast.sqlite
 make clean-raw          # wipe raw/ (keeps .gitkeep)   — WARNING: discards fetched data
 make clean-cache        # wipe fastf1_cache/
 ```
