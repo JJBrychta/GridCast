@@ -1,4 +1,4 @@
-"""Tests for racecast.session_loader — helpers, _decide, and fetch()."""
+"""Tests for racecast.ingest.sessions — helpers, _decide, and fetch()."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ import pandas as pd
 import pytest
 
 from _helpers import FUTURE, NOW, OLD, FakeSession, event_for, raises
-from racecast.net import RateLimited
-from racecast.session_loader import (
+from racecast.ingest.net import RateLimited
+from racecast.ingest.sessions import (
     Outcome,
     _atomic_write_json,
     _decide,
@@ -21,7 +21,7 @@ from racecast.session_loader import (
     _weather_records,
     fetch,
 )
-from racecast.universe import Unit
+from racecast.ingest.universe import Unit
 
 
 class TestSessionStart:
@@ -72,7 +72,7 @@ class TestLoadSession:
                 captured.update(kwargs)
 
         monkeypatch.setattr(
-            "racecast.session_loader.fastf1.get_session",
+            "racecast.ingest.sessions.fastf1.get_session",
             lambda *a, **k: _Session(),
         )
         return captured
@@ -126,7 +126,7 @@ class TestAtomicWriteJson:
     def test_leaves_no_partial_file_on_write_failure(self, tmp_path, monkeypatch):
         path = tmp_path / "c.json"
         monkeypatch.setattr(
-            "racecast.session_loader.json.dump",
+            "racecast.ingest.sessions.json.dump",
             lambda *a, **k: raises(RuntimeError("disk full")),
         )
         with pytest.raises(RuntimeError):
@@ -199,9 +199,9 @@ class TestDecide:
 @pytest.fixture
 def fetch_env(monkeypatch, tmp_path):
     """Isolate fetch(): raw/ under tmp_path, no cache init, no real sleeps."""
-    monkeypatch.setattr("racecast.universe.RAW_DIR", tmp_path)  # used by raw_path()
-    monkeypatch.setattr("racecast.session_loader.enable_cache", lambda: None)
-    monkeypatch.setattr("racecast.net.time.sleep", lambda *_: None)
+    monkeypatch.setattr("racecast.ingest.universe.RAW_DIR", tmp_path)  # used by raw_path()
+    monkeypatch.setattr("racecast.ingest.sessions.enable_cache", lambda: None)
+    monkeypatch.setattr("racecast.ingest.net.time.sleep", lambda *_: None)
     return tmp_path
 
 
@@ -215,7 +215,7 @@ def _stub_loader(monkeypatch, mapping: dict[Unit, FakeSession | Exception]):
             raise result
         return result
 
-    monkeypatch.setattr("racecast.session_loader._load_session", _load)
+    monkeypatch.setattr("racecast.ingest.sessions._load_session", _load)
     return seen
 
 
@@ -299,7 +299,7 @@ class TestFetch:
                 raise RateLimited("429")  # fail u2 only on the first pass
             return ok
 
-        monkeypatch.setattr("racecast.session_loader._load_session", _load)
+        monkeypatch.setattr("racecast.ingest.sessions._load_session", _load)
 
         fetch([u1, u2])  # writes u1, stops at u2
         fetch([u1, u2])  # u1 skipped (on disk), u2 retried and succeeds
@@ -325,9 +325,9 @@ class TestFetch:
 class TestBackfillWeather:
     @pytest.fixture
     def env(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("racecast.session_loader.RAW_DIR", tmp_path)
-        monkeypatch.setattr("racecast.session_loader.enable_cache", lambda: None)
-        monkeypatch.setattr("racecast.net.time.sleep", lambda *_: None)
+        monkeypatch.setattr("racecast.ingest.sessions.RAW_DIR", tmp_path)
+        monkeypatch.setattr("racecast.ingest.sessions.enable_cache", lambda: None)
+        monkeypatch.setattr("racecast.ingest.net.time.sleep", lambda *_: None)
         return tmp_path
 
     @staticmethod
@@ -338,7 +338,7 @@ class TestBackfillWeather:
         return p
 
     def test_only_touches_2018plus_ok_files_without_weather(self, env, monkeypatch):
-        from racecast.session_loader import backfill_weather
+        from racecast.ingest.sessions import backfill_weather
 
         ok = {"meta": {"season": 0, "round": 1, "session_type": "race"}, "status": "ok", "results": [{}]}
         need = self._write(env, 2019, 1, "race", {**ok, "meta": {"season": 2019, "round": 1, "session_type": "race"}})
@@ -354,7 +354,7 @@ class TestBackfillWeather:
             seen.append(unit)
             return FakeSession(pd.DataFrame(), weather=pd.DataFrame({"AirTemp": [20.0]}))
 
-        monkeypatch.setattr("racecast.session_loader._load_session", _load)
+        monkeypatch.setattr("racecast.ingest.sessions._load_session", _load)
 
         updated = backfill_weather()
 
@@ -366,7 +366,7 @@ class TestBackfillWeather:
         assert "weather" not in json.loads(nod.read_text())      # no_data untouched
 
     def test_rate_limit_stops_and_is_resumable(self, env, monkeypatch):
-        from racecast.session_loader import backfill_weather
+        from racecast.ingest.sessions import backfill_weather
 
         for rnd in (1, 2):
             self._write(env, 2019, rnd, "race",
@@ -381,7 +381,7 @@ class TestBackfillWeather:
                 raise RateLimited("429")
             return FakeSession(pd.DataFrame(), weather=pd.DataFrame({"AirTemp": [20.0]}))
 
-        monkeypatch.setattr("racecast.session_loader._load_session", _load)
+        monkeypatch.setattr("racecast.ingest.sessions._load_session", _load)
 
         assert backfill_weather() == 1          # round 1 done, stops at round 2
         assert backfill_weather() == 1          # resumes: round 1 skipped, round 2 done

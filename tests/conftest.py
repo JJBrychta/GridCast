@@ -32,8 +32,8 @@ def pytest_collection_modifyitems(
 
 @pytest.fixture
 def no_sleep(monkeypatch: pytest.MonkeyPatch) -> list[float]:
-    """Replace ``racecast.net.time.sleep`` with a recorder. Returns the list of
+    """Replace ``racecast.ingest.net.time.sleep`` with a recorder. Returns the list of
     durations it was asked to sleep for."""
     slept: list[float] = []
-    monkeypatch.setattr("racecast.net.time.sleep", slept.append)
+    monkeypatch.setattr("racecast.ingest.net.time.sleep", slept.append)
     return slept

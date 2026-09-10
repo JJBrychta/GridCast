@@ -12,9 +12,9 @@ pytestmark = pytest.mark.network
 
 
 def test_load_real_race_results_has_expected_shape():
-    from racecast.cache import enable_cache
-    from racecast.session_loader import _load_session
-    from racecast.universe import Unit
+    from racecast.ingest.cache import enable_cache
+    from racecast.ingest.sessions import _load_session
+    from racecast.ingest.universe import Unit
 
     enable_cache()
     session = _load_session(Unit(2024, 1, "race"))
@@ -27,7 +27,7 @@ def test_load_real_race_results_has_expected_shape():
 
 
 def test_universe_generation_for_a_completed_season():
-    from racecast.universe import UniverseGenerator
+    from racecast.ingest.universe import UniverseGenerator
 
     units = UniverseGenerator(first_season=2023, last_season=2023, fetch_delay=0.0).generate()
 

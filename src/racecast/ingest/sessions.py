@@ -25,7 +25,7 @@ import fastf1
 import pandas as pd
 from fastf1.req import Cache
 
-from racecast.cache import enable_cache
+from racecast.ingest.cache import enable_cache
 from racecast.config import (
     FIRST_SEASON,
     RAW_DIR,
@@ -35,8 +35,8 @@ from racecast.config import (
     WEATHER_FROM_SEASON,
 )
 from racecast._console import clear_status, paint, status
-from racecast.net import RateLimited, with_retries
-from racecast.universe import Unit, UniverseGenerator, raw_path
+from racecast.ingest.net import RateLimited, with_retries
+from racecast.ingest.universe import Unit, UniverseGenerator, raw_path
 
 
 class Outcome(enum.Enum):

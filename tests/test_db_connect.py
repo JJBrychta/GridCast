@@ -6,7 +6,7 @@ import sqlite3
 
 import pytest
 
-from racecast.db import connect, table_names
+from racecast.db.connect import connect, table_names
 
 EXPECTED_TABLES = {
     "seasons",

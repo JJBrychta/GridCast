@@ -32,7 +32,7 @@ import pandas as pd
 
 from racecast._console import paint
 from racecast.config import RAW_DIR, SESSION_NAME_TO_TYPE
-from racecast.db import connect
+from racecast.db.connect import connect
 
 # --------------------------------------------------------------------------- #
 #  small value parsers — raw JSON is loosely typed, the DB is STRICT
@@ -214,10 +214,10 @@ class DimCache:
                 return recovered
             raise ValueError(f"unusable DriverId {ref!r} for {rec.get('LastName')!r}")
         fields = (
-            rec.get("FirstName") or None,
-            rec.get("LastName") or None,
-            rec.get("Abbreviation") or None,  # "" for pre-~1980 drivers -> NULL
-            rec.get("CountryCode") or None,   # "" for old drivers       -> NULL
+            _text(rec.get("FirstName")),
+            _text(rec.get("LastName")),
+            _text(rec.get("Abbreviation")),  # "" / "nan" for pre-~1980 drivers -> NULL
+            _text(rec.get("CountryCode")),   # "" / "nan" for old drivers        -> NULL
         )
         cached = self._driver.get(ref)
         if cached is not None:
@@ -274,7 +274,7 @@ class DimCache:
             if recovered is not None:
                 return recovered
             raise ValueError(f"unusable TeamId {ref!r} for {rec.get('TeamName')!r}")
-        name = rec.get("TeamName") or None
+        name = _text(rec.get("TeamName"))
         cached = self._constructor.get(ref)
         if cached is not None:
             constructor_id, cached_name = cached
@@ -553,6 +553,17 @@ def _valid_ref(value) -> bool:
     would sail into the DB as ``driver_ref='nan'`` without this check.
     """
     return isinstance(value, str) and value.strip().lower() not in _BAD_REFS
+
+
+def _text(value) -> str | None:
+    """A display string, or None. Nulls out ``""`` and the stringified nulls
+    ``to_json`` produces for a missing text field — an absent ``Abbreviation`` /
+    ``CountryCode`` comes through as the literal ``"nan"`` (truthy, so
+    ``x or None`` doesn't catch it)."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return None if value.lower() in _BAD_REFS else value
 
 
 def _has_usable_row(results: list[dict]) -> bool:

@@ -1,4 +1,4 @@
-"""Tests for racecast.universe — Unit, raw_path, _normalize_dates, iter_units,
+"""Tests for racecast.ingest.universe — Unit, raw_path, _normalize_dates, iter_units,
 load_schedule."""
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 
 from _helpers import NOW, raises, schedule_df, schedule_event
-from racecast.universe import (
+from racecast.ingest.universe import (
     Unit,
     UniverseGenerator,
     _normalize_dates,
@@ -36,7 +36,7 @@ class TestUnit:
 class TestRawPath:
     @pytest.fixture(autouse=True)
     def _raw_dir(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("racecast.universe.RAW_DIR", tmp_path)
+        monkeypatch.setattr("racecast.ingest.universe.RAW_DIR", tmp_path)
         self.raw = tmp_path
 
     def test_full_layout(self):
@@ -169,7 +169,7 @@ class TestIterUnits:
 class TestLoadSchedule:
     @pytest.fixture(autouse=True)
     def _raw_dir(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("racecast.universe.RAW_DIR", tmp_path)
+        monkeypatch.setattr("racecast.ingest.universe.RAW_DIR", tmp_path)
         self.raw = tmp_path
 
     def _write_cache(self, season: int, df: pd.DataFrame) -> None:
@@ -193,7 +193,7 @@ class TestLoadSchedule:
             ),
         )
         monkeypatch.setattr(
-            "racecast.universe.fastf1.get_event_schedule",
+            "racecast.ingest.universe.fastf1.get_event_schedule",
             lambda season: raises(AssertionError("API hit for a cached past season")),
         )
 
@@ -215,7 +215,7 @@ class TestLoadSchedule:
             ]
         )
         monkeypatch.setattr(
-            "racecast.universe.fastf1.get_event_schedule", lambda season: fresh
+            "racecast.ingest.universe.fastf1.get_event_schedule", lambda season: fresh
         )
 
         out = load_schedule(1975, current_season=2024)
@@ -236,7 +236,7 @@ class TestLoadSchedule:
                 [{"RoundNumber": 1, "EventName": "fresh", "EventDate": pd.Timestamp("2024-03-02")}]
             )
 
-        monkeypatch.setattr("racecast.universe.fastf1.get_event_schedule", _fetch)
+        monkeypatch.setattr("racecast.ingest.universe.fastf1.get_event_schedule", _fetch)
 
         out = load_schedule(2024, current_season=2024)
 
@@ -246,7 +246,7 @@ class TestLoadSchedule:
 
     def test_empty_frame_is_not_cached(self, monkeypatch):
         monkeypatch.setattr(
-            "racecast.universe.fastf1.get_event_schedule",
+            "racecast.ingest.universe.fastf1.get_event_schedule",
             lambda season: pd.DataFrame(),
         )
 
@@ -259,7 +259,7 @@ class TestLoadSchedule:
 class TestLoadCircuits:
     @pytest.fixture(autouse=True)
     def _raw_dir(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("racecast.universe.RAW_DIR", tmp_path)
+        monkeypatch.setattr("racecast.ingest.universe.RAW_DIR", tmp_path)
         self.raw = tmp_path
 
     def _stub_ergast(self, monkeypatch, frame: pd.DataFrame) -> list[int]:
@@ -273,7 +273,7 @@ class TestLoadCircuits:
                 seen.append(season)
                 return frame
 
-        monkeypatch.setattr("racecast.universe.Ergast", _FakeErgast)
+        monkeypatch.setattr("racecast.ingest.universe.Ergast", _FakeErgast)
         return seen
 
     def test_past_season_cache_miss_fetches_and_writes(self, monkeypatch):
@@ -315,7 +315,7 @@ class TestUniverseGenerator:
         assert gen.last_season == datetime.now(timezone.utc).year
 
     def test_generate_walks_every_season_and_concatenates_units(self, monkeypatch):
-        monkeypatch.setattr("racecast.universe.enable_cache", lambda: None)
+        monkeypatch.setattr("racecast.ingest.universe.enable_cache", lambda: None)
         schedules = {
             2020: schedule_df(
                 [schedule_event(1, ("Race", datetime(2020, 3, 1)), event_date=datetime(2020, 3, 1))]
@@ -325,11 +325,11 @@ class TestUniverseGenerator:
             ),
         }
         monkeypatch.setattr(
-            "racecast.universe.load_schedule",
+            "racecast.ingest.universe.load_schedule",
             lambda season, *, current_season, fetch_delay: schedules[season],
         )
         monkeypatch.setattr(
-            "racecast.universe.load_circuits",
+            "racecast.ingest.universe.load_circuits",
             lambda season, *, current_season, fetch_delay: pd.DataFrame(),
         )
 

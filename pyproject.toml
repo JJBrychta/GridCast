@@ -38,7 +38,7 @@ markers = [
 
 [tool.coverage.run]
 source = ["racecast"]
-omit = ["*/data_pipeline.py"]  # thin CLI entrypoint
+omit = ["*/ingest/pipeline.py"]  # thin CLI entrypoint
 
 [tool.coverage.report]
 exclude_also = [

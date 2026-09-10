@@ -1,19 +1,32 @@
-# RaceCast — data scraping layer
+# RaceCast
 
 Pulls F1 results from the FastF1 / Ergast(Jolpica) APIs into a local `raw/` archive,
-then mirrors it into a queryable SQLite DB. Feature engineering is a later step.
+mirrors it into a queryable SQLite DB, and builds features / models on top.
 
 ```
-universe  ──►  session_loader  ──►  build_db  ──►  (features / model)
-schedules      raw/**/*.json         data/racecast.sqlite
+ingest.universe ─► ingest.sessions ─► db.build ─► features.build ─► models.*
+schedules          raw/**/*.json      racecast.sqlite   data/datasets/
 ```
 
-Everything is resumable: kill it, hit a rate limit, Ctrl-C — nothing is left
-half-written, and re-running picks up exactly where it stopped.
+The ingest → DB half is resumable: kill it, hit a rate limit, Ctrl-C — nothing
+is left half-written, and re-running picks up exactly where it stopped.
+
+## Package layout (`src/racecast/`)
+
+| | |
+|---|---|
+| `config.py`, `_console.py` | shared — paths/constants, terminal colour |
+| `ingest/` | **acquisition.** `net` (retry/rate-limit), `cache` (FastF1 HTTP cache), `universe` (step 1), `sessions` (step 2), `pipeline` (universe → fetch → build runner) |
+| `db/` | **the derived SQLite mirror.** `schema.sql` / `schema.dbml`, `connect` (open + bootstrap), `build` (step 3, raw/ → DB) |
+| `features/` | `query` (DB → DataFrame, the read interface used by notebooks too), `build` (DB → model-ready matrix) |
+| `models/` | `train`, `evaluate`, `predict` |
+
+`raw/` and `data/` are gitignored — everything downstream of the APIs is
+rebuildable locally.
 
 ---
 
-## Step 1 — Universe (`universe.py`)
+## Step 1 — Universe (`ingest/universe.py`)
 
 Produces the list of things to fetch: one **`Unit(season, round, session_type)`**
 per session that has already started.
@@ -37,7 +50,7 @@ The universe is a `list[Unit]` recomputed every run — never stored.
 
 ---
 
-## Step 2 — Session loader (`session_loader.py`)
+## Step 2 — Session loader (`ingest/sessions.py`)
 
 ```
 todo = universe  −  {units whose raw file already exists}
@@ -71,9 +84,9 @@ weather=<season≥2018>, messages=False)`, then classify:
 
 ---
 
-## Step 3 — Build (`build_db.py`)
+## Step 3 — Build (`db/build.py`)
 
-Mirrors `raw/` into `data/racecast.sqlite` (schema in `schema.sql` / `schema.dbml`).
+Mirrors `raw/` into `data/racecast.sqlite` (schema in `db/schema.sql` / `db/schema.dbml`).
 A faithful, disposable copy — no aggregation beyond `dnf` and the weather rollup,
 no training-window filter. `make clean-db && make build-db` is the "migration".
 
@@ -98,7 +111,9 @@ Idempotent, resumable:
   skipped **without** being marked, so it's retried next run.
 - **Missing slugs.** Ergast sometimes ships a result with no `DriverId`/`TeamId`
   (a whole quali not populated yet, or one driver missing from a session).
-  `"nan"` (a stringified NaN from `to_json`) counts as missing, not a real ref.
+  `"nan"` (a stringified NaN from `to_json`) counts as missing, not a real ref —
+  and likewise for text fields: an absent `Abbreviation` / `CountryCode` arrives
+  as the literal `"nan"` and is stored `NULL` (`_text`).
   - *All* rows bad → skip the file unmarked (retry).
   - *A few* rows bad → try to recover each: match the row's
     `(Abbreviation, LastName)` — then `+ FirstName` if that's still ambiguous
@@ -136,7 +151,7 @@ If we trusted that empty result, `_decide` would write a **false `no_data`
 marker** — and because the marker permanently stops re-fetching, that's silent,
 irreversible data loss.
 
-**Fix** (`net.py`): `with_retries` attaches a logging handler
+**Fix** (`ingest/net.py`): `with_retries` attaches a logging handler
 (`_RateLimitLogProbe`) to the root logger for the duration of each call. If any
 log record — its message *or* its attached exception — contains `"429"` /
 `"too many requests"`, it raises `RateLimited`, **even when `fn()` returned
@@ -144,7 +159,7 @@ normally**. Schedule 429 and session 429 now behave identically: the run stops
 cleanly, nothing is written, a re-run resumes.
 
 **Constraint:** the `fastf1` / `requests_cache` loggers must stay at `WARNING`
-or below. Muting them (e.g. `setLevel(CRITICAL)` in `data_pipeline.py`) blinds
+or below. Muting them (e.g. `setLevel(CRITICAL)` in `ingest/pipeline.py`) blinds
 the probe.
 
 **Rejected alternatives:**
@@ -233,7 +248,7 @@ rate-limit stop red). While a unit is throttling + fetching, a transient
 Both are disabled automatically when stdout isn't a TTY or `NO_COLOR` is set.
 FastF1's own INFO/WARNING chatter is silenced by `enable_cache()`
 (`fastf1.set_log_level("ERROR")`) — this only lowers FastF1's console handler,
-so net.py's 429 log-probe is unaffected.
+so `ingest/net.py`'s 429 log-probe is unaffected.
 
 ---
 
@@ -271,9 +286,9 @@ stop, atomic writes).
 ## Running
 
 ```bash
-make pipeline           # universe -> session_loader, 1950 -> current season
-make fetch              # session_loader only
-make universe           # universe only
+make pipeline           # ingest.universe -> ingest.sessions -> db.build, 1950 -> now
+make fetch              # ingest.sessions only
+make universe           # ingest.universe only
 make backfill-weather   # add weather to ok files fetched before weather support
 make build-db              # step 3: raw/ -> data/racecast.sqlite (idempotent)
 make init-db            # just create the empty DB with the schema

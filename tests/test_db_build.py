@@ -1,4 +1,4 @@
-"""Tests for racecast.build_db — parsers, DimCache, and the two build passes."""
+"""Tests for racecast.db.build — parsers, DimCache, and the two build passes."""
 
 from __future__ import annotations
 
@@ -6,16 +6,17 @@ import json
 
 import pytest
 
-from racecast.build_db import (
+from racecast.db.build import (
     DimCache,
     _aggregate_weather,
     _dnf,
     _int,
     _iso,
+    _text,
     pass1_reference,
     pass2_results,
 )
-from racecast.db import connect
+from racecast.db.connect import connect
 
 
 # --------------------------------------------------------------------------- #
@@ -42,6 +43,14 @@ class TestParsers:
     )
     def test_dnf(self, classified, expected):
         assert _dnf(classified) == expected
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [("VER", "VER"), ("  Lewis ", "Lewis"), ("", None), ("nan", None),
+         ("NaN", None), ("null", None), (None, None), (float("nan"), None)],
+    )
+    def test_text(self, value, expected):
+        assert _text(value) == expected
 
 
 class TestAggregateWeather:
@@ -79,7 +88,7 @@ class TestAggregateWeather:
 def raw(monkeypatch, tmp_path):
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
-    monkeypatch.setattr("racecast.build_db.RAW_DIR", raw_dir)
+    monkeypatch.setattr("racecast.db.build.RAW_DIR", raw_dir)
     return raw_dir
 
 
@@ -416,6 +425,15 @@ class TestDimCache:
         assert first == again
         row = conn.execute("SELECT first_name FROM drivers WHERE driver_id = ?", (first,)).fetchone()
         assert row["first_name"] == "Robert"
+
+    def test_stringified_nan_text_fields_become_null(self, conn):
+        cache = DimCache(conn)
+        did = cache.driver({"DriverId": "adams", "FirstName": "Philippe",
+                            "LastName": "Adams", "Abbreviation": "nan", "CountryCode": "nan"})
+        row = conn.execute(
+            "SELECT abbreviation, country_code FROM drivers WHERE driver_id = ?", (did,)
+        ).fetchone()
+        assert (row["abbreviation"], row["country_code"]) == (None, None)
 
     def test_same_ref_returns_same_id(self, conn):
         cache = DimCache(conn)

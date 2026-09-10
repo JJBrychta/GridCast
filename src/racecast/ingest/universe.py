@@ -9,7 +9,7 @@ from pathlib import Path
 
 from scipy.constants import year
 
-from racecast.cache import enable_cache
+from racecast.ingest.cache import enable_cache
 from racecast.config import (
     FIRST_SEASON,
     RAW_DIR,
@@ -17,7 +17,7 @@ from racecast.config import (
     FETCH_DELAY,
     SESSION_NAME_TO_TYPE,
 )
-from racecast.net import with_retries
+from racecast.ingest.net import with_retries
 
 
 @dataclass(frozen=True)

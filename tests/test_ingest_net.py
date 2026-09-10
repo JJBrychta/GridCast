@@ -1,4 +1,4 @@
-"""Tests for racecast.net — retry / rate-limit classification and with_retries."""
+"""Tests for racecast.ingest.net — retry / rate-limit classification and with_retries."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import requests
 from fastf1.exceptions import RateLimitExceededError
 
 from _helpers import raises
-from racecast.net import (
+from racecast.ingest.net import (
     RateLimited,
     _is_rate_limit,
     _is_transient,

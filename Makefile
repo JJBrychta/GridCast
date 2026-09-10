@@ -2,27 +2,27 @@
 
 # Build the universe (1950 -> current season) and cache season schedules.
 pipeline:
-	uv run python -m racecast.data_pipeline
+	uv run python -m racecast.ingest.pipeline
 
 # Just the universe generator's own __main__ (current season only).
 universe:
-	uv run python -m racecast.universe
+	uv run python -m racecast.ingest.universe
 
 # Step 2: download raw session results for units not yet on disk.
 fetch:
-	uv run python -m racecast.session_loader
+	uv run python -m racecast.ingest.sessions
 
 # One-off: add the weather key to ok files fetched before weather support (2018+).
 backfill-weather:
-	uv run python -m racecast.session_loader --weather
+	uv run python -m racecast.ingest.sessions --weather
 
 # Create data/racecast.sqlite with the schema applied (safe to re-run).
 init-db:
-	uv run python -m racecast.db
+	uv run python -m racecast.db.connect
 
 # Step 3: build data/racecast.sqlite from raw/ (idempotent — only new/changed files).
 build-db:
-	uv run python -m racecast.build_db
+	uv run python -m racecast.db.build
 
 # Wipe raw/ but keep dotfiles (.gitkeep).
 clean-raw:
