@@ -106,10 +106,6 @@ def f_grid_penalty(base: pd.DataFrame) -> pd.Series:
     return (base["grid_position"] - base["quali_position"]).rename("grid_penalty")
 
 
-def f_made_q3(base: pd.DataFrame) -> pd.Series:
-    """Reached the top-10 qualifying shootout."""
-    return base["q3_ms"].notna().astype("int8").rename("made_q3")
-
 def f_quali_gap_to_pole(base: pd.DataFrame) -> pd.Series:
     """Fraction slower than pole: (best - pole) / pole, within each race."""
     best = _best_quali_ms(base)
@@ -133,7 +129,7 @@ def f_season_progress(base: pd.DataFrame) -> pd.Series:
 
 
 BASIC_FEATURES = [
-    f_grid, f_grid_penalty, f_made_q3,
+    f_grid, f_grid_penalty,
     f_quali_gap_to_pole, f_quali_gap_to_teammate, f_season_progress,
 ]
 
@@ -261,7 +257,7 @@ def f_driver_career_podium_rate(base):
     """Prior podiums / prior starts, over all the driver's earlier races —
     long-run caliber a 5-race window can't capture. Near-constant within a
     season; noisy in the first ~10 starts (pair with driver_career_starts);
-    NaN on debut. "Career" = within the loaded history (2003+)."""
+    NaN on debut. "Career" = within the loaded history (1991+)."""
     ordered = base.sort_values(["event_date", "round_number"])
     pod = _podium_flag(base).reindex(ordered.index)
     grp = pod.groupby(ordered["driver_id"], sort=False)

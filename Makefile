@@ -1,7 +1,7 @@
-.PHONY: pipeline universe fetch backfill-weather init-db build-db clean-raw clean-cache clean-db clean
+.PHONY: ingest universe fetch backfill-weather init-db build-db features clean-raw clean-cache clean-db clean
 
-# Build the universe (1950 -> current season) and cache season schedules.
-pipeline:
+# Full data acquisition: universe -> fetch raw sessions -> build the DB.
+ingest:
 	uv run python -m racecast.ingest.pipeline
 
 # Just the universe generator's own __main__ (current season only).
@@ -23,6 +23,10 @@ init-db:
 # Step 3: build data/racecast.sqlite from raw/ (idempotent — only new/changed files).
 build-db:
 	uv run python -m racecast.db.build
+
+# Step 4: DB -> data/datasets/feature_base.parquet + feature_matrix.parquet
+features:
+	uv run python -m racecast.features.build
 
 # Wipe raw/ but keep dotfiles (.gitkeep).
 clean-raw:

@@ -21,10 +21,13 @@ One row per **race entry**, that weekend's qualifying pivoted on:
 
 | group | columns |
 |---|---|
-| identity | `year`, `round_number`, `event_date`, `driver_id/ref`, `constructor_id`/`team_ref`, `circuit_id/ref` |
+| identity | `year`, `round_number`, `event_date`, `race_date`, `event_format`, `driver_id/ref`, `constructor_id`/`team_ref`, `circuit_id/ref` |
 | pre-race (feature inputs) | `grid_position`, `quali_position`, `q1_ms`, `q2_ms`, `q3_ms` |
 | outcome (target source, never a feature) | `finish_position`, `classified_position`, `status`, `dnf`, `points`, `laps`, `time_ms` |
 | race conditions (2018+, leak — circuit history only) | `rainfall_any`, `rainfall_pct`, `air_temp_avg`, `track_temp_avg` |
+
+`_IDENTIFIERS` (carried into the matrix, excluded from `X`) is a subset —
+`year`, `round_number`, `event_date`, and the six `*_id`/`*_ref` columns.
 
 Two decisions baked into `load_base`:
 
@@ -36,6 +39,14 @@ Two decisions baked into `load_base`:
 - **Pit-lane start → back of grid.** Ergast stores grid `0` for a pit-lane
   start; that's a nonsense value for the model and blows up `log(grid)`.
   Remapped to the field size — a real, large grid slot.
+
+**Qualifying-data gaps.** `q1_ms`/`q2_ms`/`q3_ms` are only reliable from **2006**
+(2003–05 used single-lap / aggregate qualifying — often only `q1_ms`, sometimes
+nothing). A handful of 2006+ sessions (e.g. Miami 2025) have positions but no
+times. `quali_position` is populated whenever there's any qualifying, so
+features lean on it; time-gap features are `NaN` where times are missing (the
+GBT handles it). A `made_q3` flag was dropped for this reason — it read a flat 0
+for 2003–05 and is redundant with `quali_position` anyway.
 
 ---
 
@@ -74,13 +85,15 @@ derived Series.
   `halflife` races (distant past fades, no hard cutoff).
 - `halflife` None → fixed `window` of the last N races.
 
-### `team_prior(base, value, *, window=5, race_stat="mean", roll_stat="mean")`
+### `team_prior(base, value, *, window=5, min_periods=3, race_stat="mean", roll_stat="mean")`
 
-A constructor has **two car-rows per race**, so `rolling_prior(…, "constructor_id", …)`
-would let the second car see its teammate's *same-race* result (`shift(1)` steps
-one row, not one race). `team_prior` collapses each `(team, race)` to one value
-first (`race_stat` = `mean`/`min`/`max`), *then* rolls, then broadcasts back to
-both cars. Use it for **every** constructor-grouped feature.
+A constructor has **more than one car-row per race** (two since the 1990 two-car
+rule), so `rolling_prior(…, "constructor_id", …)` would let the second car see
+its teammate's *same-race* result — `shift(1)` steps one row, not one race.
+`team_prior` collapses each `(team, race)` to one value first (`race_stat` =
+`mean`/`min`/`max`), *then* rolls, *then* broadcasts back to every car row. It
+doesn't assume a car count (a `shift(2)` hack would). Use it for **every**
+constructor-grouped feature.
 
 ---
 
@@ -93,7 +106,6 @@ Row-wise or within-race. Available from a driver's very first weekend.
 | `grid_position` | `f_grid` | **The anchor.** ~85 % of podiums are decided by where you start. Nonlinear, so let the tree bend it. |
 | `quali_position` | `f_grid` | Grid before any penalty — the pure result. |
 | `grid_penalty` | `f_grid_penalty` | `grid − quali`. Large positive = engine/gearbox penalty dropped them back. |
-| `made_q3` | `f_made_q3` | Reached the top-10 shootout — a clean "is this a front-half car" flag. |
 | `quali_gap_to_pole_pct` | `f_quali_gap_to_pole` | `(best_lap − pole) / pole`, within the race. P2 that's 0.05 s off pole ≠ P2 that's 0.6 s off. |
 | `quali_gap_to_teammate_ms` | `f_quali_gap_to_teammate` | Best lap minus the team's mean, same weekend. Isolates **driver** pace from **car** pace (same machinery, same track). |
 | `season_progress` | `f_season_progress` | `round / rounds_in_season`. The pecking order is fuzzier early; some teams develop through the year. |
@@ -143,7 +155,7 @@ from racecast.features.build import (
 
 base   = load_base()                                              # 1991+, ~14 k rows
 matrix = build_matrix(base, BASIC_FEATURES + HISTORY_FEATURES, target="podium")
-X, y   = matrix[feature_columns(matrix)], matrix["podium"]        # 20 features, 9.7 k rows
+X, y   = matrix[feature_columns(matrix)], matrix["podium"]        # 19 features, 9.7 k rows
 ```
 
 Ablations — pass a subset: `build_matrix(base, ["f_grid"], ...)`, or
@@ -177,7 +189,7 @@ because the identical code ran on `history + upcoming`.
 ## Run
 
 ```bash
-uv run python -m racecast.features.build      # -> data/datasets/feature_base.parquet + feature_matrix.parquet
+make features      # -> data/datasets/feature_base.parquet + feature_matrix.parquet
 ```
 
 Save Parquet (round-trips dtypes exactly, ~10× smaller); a `.csv` name gets you

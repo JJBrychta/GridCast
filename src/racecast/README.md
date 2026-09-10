@@ -46,7 +46,7 @@ per session that has already started.
 
 The universe is a `list[Unit]` recomputed every run — never stored.
 
-`fetch_delay` (default `SCHEDULE_FETCH_DELAY`) throttles uncached schedule fetches.
+`fetch_delay` (default `FETCH_DELAY`) throttles uncached schedule fetches.
 
 ---
 
@@ -182,7 +182,7 @@ Error` vs `No data for this session`. So the probe keys specifically on `"429"`,
 On `RateLimited`, `fetch()` breaks immediately rather than backing off against a
 closed door. Jolpica's limit is ~500 requests/hour; a re-run an hour later
 resumes from the first missing file. `SESSION_FETCH_DELAY` throttles between
-session loads, `SCHEDULE_FETCH_DELAY` between schedule fetches.
+session loads, `FETCH_DELAY` between schedule fetches.
 
 ### 4. Schedule datetime format depends on the source
 
@@ -276,7 +276,7 @@ stop, atomic writes).
 | Key | Meaning |
 |---|---|
 | `FIRST_SEASON` | 1950 |
-| `SCHEDULE_FETCH_DELAY` / `SESSION_FETCH_DELAY` | throttle between uncached fetches |
+| `FETCH_DELAY` / `SESSION_FETCH_DELAY` | throttle between uncached schedule / session fetches |
 | `RESULTS_LAG_DAYS` | empty result younger than this → `retry`, not `no_data` |
 | `SESSION_NAME_TO_TYPE` | which schedule sessions to collect + their slugs |
 | `RAW_DIR`, `FASTF1_CACHE` | local paths (both gitignored) |
@@ -286,11 +286,12 @@ stop, atomic writes).
 ## Running
 
 ```bash
-make pipeline           # ingest.universe -> ingest.sessions -> db.build, 1950 -> now
+make ingest             # universe -> fetch raw sessions -> build DB, 1950 -> now
 make fetch              # ingest.sessions only
 make universe           # ingest.universe only
 make backfill-weather   # add weather to ok files fetched before weather support
-make build-db              # step 3: raw/ -> data/racecast.sqlite (idempotent)
+make build-db           # step 3: raw/ -> data/racecast.sqlite (idempotent)
+make features           # step 4: DB -> data/datasets/*.parquet
 make init-db            # just create the empty DB with the schema
 make clean-db           # rm data/racecast.sqlite
 make clean-raw          # wipe raw/ (keeps .gitkeep)   — WARNING: discards fetched data
