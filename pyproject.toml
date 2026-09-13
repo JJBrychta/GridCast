@@ -13,6 +13,7 @@ dependencies = [
     "pyarrow>=25.0.1",
     "python-dotenv>=1.0.0",
     "requests>=2.31.0",
+    "scikit-learn>=1.9.1",
 ]
 
 [dependency-groups]
