@@ -276,6 +276,45 @@ HISTORY_FEATURES = [
     f_experience, f_driver_career_podium_rate,
 ]
 
+# --------------------------------------------------------------------------- #
+#  relativizing
+# --------------------------------------------------------------------------- #
+REL_GROUP_COLS = ["year", "round_number"]
+
+DRIVER_FEATURES = [
+    "grid_position", "quali_position", "grid_penalty",
+    "driver_finish_l5", "driver_circuit_finish", "driver_quali_pos_l5",
+    "driver_podium_rate_l5", "driver_podium_rate_ewm15",
+    "driver_dnf_rate_l10", "driver_career_podium_rate",
+]
+
+TEAM_FEATURES = [
+    "team_finish_l5", "team_best_finish_l5",
+    "team_podium_rate_l10", "team_dnf_rate_l10",
+]
+def relativize(df: pd.DataFrame, driver_cols: list[str], team_cols: list[str]) -> pd.DataFrame:
+    """Relativize driver-level stats within the race field,
+       and team-level stats within the set of teams in that race."""
+
+    for col in driver_cols:
+        grp = df.groupby(REL_GROUP_COLS)[col]
+        df[f"{col}_pctile"] = grp.rank(pct=True)
+
+    for col in team_cols:
+        team_level = (
+            df.drop_duplicates(subset=REL_GROUP_COLS + ["constructor_id"])
+              [REL_GROUP_COLS + ["constructor_id", col]]
+        )
+        team_level[f"{col}_pctile"] = (
+            team_level.groupby(REL_GROUP_COLS)[col].rank(pct=True)
+        )
+        df = df.merge(
+            team_level[REL_GROUP_COLS + ["constructor_id", f"{col}_pctile"]],
+            on=REL_GROUP_COLS + ["constructor_id"],
+            how="left",
+        )
+
+    return df
 
 # --------------------------------------------------------------------------- #
 #  compose
@@ -316,6 +355,7 @@ if __name__ == "__main__":
     save(base, "feature_base", dir=DATASETS_DIR)
 
     matrix = build_matrix(base, BASIC_FEATURES + HISTORY_FEATURES, target="podium")
+    matrix = relativize(matrix, driver_cols=DRIVER_FEATURES, team_cols=TEAM_FEATURES)
     print("matrix:", matrix.shape)
     print("features:", feature_columns(matrix))
     print("podium rate:", round(float(matrix["podium"].mean()), 3))
