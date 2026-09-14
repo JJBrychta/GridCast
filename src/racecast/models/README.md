@@ -9,7 +9,7 @@ algorithm choice matters here (short answer: not much, see below).
 | | approach | precision@3 | other metric |
 |---|---|---|---|
 | model_0 | Random Forest, binary podium target | 0.667 | avg precision 0.661 |
-| model_1 | XGBoost (tuned), binary podium target | 0.652 | avg precision 0.652 |
+| model_1 | XGBoost (tuned), binary podium target | 0.652 | avg precision 0.650 |
 | model_2 | XGBoost, learning-to-rank (whole race at once) | 0.682 | ndcg@3 0.824 |
 
 All three land in the same range — `grid_position`/`quali_position` dominate
