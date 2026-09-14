@@ -349,6 +349,12 @@ def feature_columns(matrix: pd.DataFrame) -> list[str]:
     return [c for c in matrix.columns if c not in _IDENTIFIERS and c not in TARGETS]
 
 
+def features_for_race(year: int, round_number: int) -> pd.DataFrame:
+    base = load_base()
+    matrix = build_matrix(base, BASIC_FEATURES + HISTORY_FEATURES, target="podium")
+    matrix = relativize(matrix, driver_cols=DRIVER_FEATURES, team_cols=TEAM_FEATURES)
+    return matrix[(matrix["year"] == year) & (matrix["round_number"] == round_number)]
+
 if __name__ == "__main__":
     base = load_base()
     print("base:", base.shape)

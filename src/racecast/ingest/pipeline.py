@@ -7,13 +7,21 @@ from racecast.ingest.net import RateLimited
 from racecast.ingest.sessions import fetch
 from racecast.ingest.universe import UniverseGenerator
 
-if __name__ == "__main__":
+def run(first_season: int = FIRST_SEASON, last_season: int | None = None) -> None:
+    """Universe -> fetch raw sessions -> build the DB. Both fetch and build are
+    incremental (see their own docstrings), so re-running this after a single
+    new session (e.g. a quali that just finished) is cheap."""
     try:
         enable_cache()
-        universe = UniverseGenerator(first_season=FIRST_SEASON, last_season=datetime.now().year).generate()  # FIRST_SEASON -> current season
-        # universe = UniverseGenerator(first_season=2026, last_season=2026).generate()  # FIRST_SEASON -> current season
+        universe = UniverseGenerator(
+            first_season=first_season, last_season=last_season or datetime.now().year
+        ).generate()
         print(f"{len(universe)} units in universe")
         fetch(universe)
         build()
     except RateLimited as exc:
         print(f"{exc}\nCached schedules are kept — re-run later to continue.")
+
+
+if __name__ == "__main__":
+    run()
