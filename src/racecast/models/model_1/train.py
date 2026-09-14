@@ -1,24 +1,25 @@
-"""Model 0: Random Forest, trained on SELECTED_FEATURES.
+"""Model 1: XGBoost, trained on SELECTED_FEATURES.
 
-Self-contained on purpose: split, evaluate, train, save/load all live in this
-one file rather than a shared module, so it's the whole story for this model
-in one place. model_1, model_2, ... will duplicate this shape rather than
-import from here — that's fine, each model stays independently readable.
+Self-contained on purpose, same shape as model_0/train.py: split, evaluate,
+train, save/load all live in this one file rather than a shared module.
+Deliberately duplicated across models rather than imported, so each one
+stays independently readable. See tune.py (this folder) for how the
+hyperparameters below were found.
 
-    uv run python -m racecast.models.model_0.train
+    uv run python -m racecast.models.model_1.train
 """
 
 from __future__ import annotations
 
 import joblib
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import average_precision_score, roc_auc_score
+from xgboost import XGBClassifier
 
 from racecast.config import FEATURE_MATRIX_PATH, REPO_ROOT
 
 TARGET = "podium"
-MODEL_PATH = REPO_ROOT / "data" / "models" / "model_0.joblib"
+MODEL_PATH = REPO_ROOT / "data" / "models" / "model_1.joblib"
 
 SELECTED_FEATURES = [
     # grid / qualifying position
@@ -100,16 +101,16 @@ def evaluate(clean: pd.DataFrame, probs) -> dict[str, float]:
     }
 
 
-def save_model(model: RandomForestClassifier) -> None:
+def save_model(model: XGBClassifier) -> None:
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(model, MODEL_PATH)
 
 
-def load_model() -> RandomForestClassifier:
+def load_model() -> XGBClassifier:
     return joblib.load(MODEL_PATH)
 
 
-def train() -> RandomForestClassifier:
+def train() -> XGBClassifier:
     train_df, val_df, _test_df = get_split()
 
     missing = [c for c in SELECTED_FEATURES if c not in train_df.columns]
@@ -119,10 +120,25 @@ def train() -> RandomForestClassifier:
     X_train, y_train, _ = _xy(train_df, SELECTED_FEATURES)
     X_val, _y_val, val_clean = _xy(val_df, SELECTED_FEATURES)
 
-    model = RandomForestClassifier(
-        n_estimators=300,
-        max_depth=6,
-        class_weight="balanced",
+    # Counters the ~3:17 podium/non-podium imbalance — XGBoost's equivalent of
+    # RandomForest's class_weight="balanced" (no such string option here).
+    pos = int(y_train.sum())
+    neg = len(y_train) - pos
+    scale_pos_weight = neg / pos
+
+    # From tune.py's RandomizedSearchCV + TimeSeriesSplit search over `train`
+    # (best CV average_precision ~0.698); re-run tune.py and update by hand if
+    # SELECTED_FEATURES or the data changes enough to be worth re-searching.
+    model = XGBClassifier(
+        n_estimators=195,
+        max_depth=8,
+        learning_rate=0.019114463849152934,
+        subsample=0.8417669517111269,
+        colsample_bytree=0.6431565707973218,
+        min_child_weight=4,
+        reg_alpha=3.4775804321306376,
+        reg_lambda=0.6966572720293784,
+        scale_pos_weight=scale_pos_weight,
         random_state=42,
     )
     model.fit(X_train, y_train)

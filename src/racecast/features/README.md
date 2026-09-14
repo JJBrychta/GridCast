@@ -154,7 +154,7 @@ from racecast.features.build import (
 )
 
 base   = load_base()                                              # 1991+, ~14 k rows
-matrix = build_matrix(base, BASIC_FEATURES + HISTORY_FEATURES, target="podium")
+matrix = build_matrix(base, BASIC_FEATURES + HISTORY_FEATURES, target=["podium"])
 X, y   = matrix[feature_columns(matrix)], matrix["podium"]        # 19 features, 9.7 k rows
 ```
 
@@ -171,10 +171,11 @@ Ablations — pass a subset: `build_matrix(base, ["f_grid"], ...)`, or
 
 ### Targets
 
-`TARGETS` is a registry: `build_matrix(base, features, target="podium")`. Add
-`t_points`, `t_win`, `t_beat_teammate` there to predict other things — no other
-change. Every target keys on the started / `classified_position` rules above and
-returns `<NA>` for a non-starter.
+`TARGETS` is a registry: `build_matrix(base, features, target=["podium"])`. Pass
+several at once (`target=["podium", "finish_position"]`) to attach multiple
+target columns in one call. Add `t_points`, `t_win`, `t_beat_teammate` there to
+predict other things — no other change. Every target keys on the started /
+`classified_position` rules above and returns `<NA>` for a non-starter.
 
 ### Predicting an upcoming race
 

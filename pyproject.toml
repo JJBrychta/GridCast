@@ -15,6 +15,8 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "requests>=2.31.0",
     "scikit-learn>=1.9.1",
+    "scipy-stubs~=1.17.1",
+    "xgboost>=3.2.0",
 ]
 
 [dependency-groups]

@@ -33,7 +33,7 @@ def refresh() -> pd.DataFrame:
     base = load_base()
     save(base, "feature_base", dir=DATASETS_DIR)
 
-    matrix = build_matrix(base, BASIC_FEATURES + HISTORY_FEATURES, target="podium")
+    matrix = build_matrix(base, BASIC_FEATURES + HISTORY_FEATURES, target=["podium", "finish_position"])
     matrix = relativize(matrix, driver_cols=DRIVER_FEATURES, team_cols=TEAM_FEATURES)
     save(matrix, "feature_matrix", dir=DATASETS_DIR)
     return matrix

@@ -80,9 +80,20 @@ def t_podium(base: pd.DataFrame) -> pd.Series:
     y = base["classified_position"].isin(["1", "2", "3"]).astype("int8")
     return y.where(_started(base), other=pd.NA).astype("Int8")
 
+def t_position(base: pd.DataFrame) -> pd.Series:
+    """Position in race based on classified_position: the numeric finish order
+    when classified, or the field size (last-place-equivalent) for a DNF/DSQ/
+    withdrawal — mirrors the grid_position pit-lane-start convention in
+    load_base(). NA for a non-starter (race not run yet)."""
+    field_size = base.groupby(["year", "round_number"])["driver_id"].transform("size")
+    numeric = base["classified_position"].str.isdigit().astype("boolean").fillna(False)
+    position = pd.to_numeric(base["classified_position"].where(numeric))
+    y = position.fillna(field_size).astype("Int64")
+    return y.where(_started(base), other=pd.NA).astype("Int64")
 
 TARGETS = {
     "podium": t_podium,
+    "finish_position": t_position,
 }
 
 
@@ -323,22 +334,22 @@ def relativize(df: pd.DataFrame, driver_cols: list[str], team_cols: list[str]) -
 def build_matrix(
     base: pd.DataFrame,
     features: list,
-    target: str | None = None,
+    target: list[str] | None = None,
     min_year: int | None = MODEL_FROM_YEAR,
 ) -> pd.DataFrame:
-    """Identifier columns + the chosen ``features`` (+ the chosen ``target``, last).
+    """Identifier columns + the chosen ``features`` (+ the chosen ``target``(s), last).
 
     ``features``  list of feature functions — each ``base -> named Series / DataFrame``.
-    ``target``    a key of ``TARGETS`` (``"podium"`` …), or ``None`` for prediction
-                  rows where the outcome isn't known yet.
+    ``target``    keys of ``TARGETS`` (``["podium", "finish_position"]`` …), or
+                  ``None``/``[]`` for prediction rows where no outcome is known yet.
     ``min_year``  features are computed on the full ``base`` (so pre-window races
                   feed the rolling windows), then rows before ``min_year`` are
                   dropped. ``None`` keeps every row.
     """
     parts = [fn(base) for fn in features]
     matrix = pd.concat([base[_IDENTIFIERS], *parts], axis=1)
-    if target is not None:
-        matrix[target] = TARGETS[target](base)
+    for name in target or []:
+        matrix[name] = TARGETS[name](base)
     if min_year is not None:
         matrix = matrix[matrix["year"] >= min_year]
     return matrix.reset_index(drop=True)
@@ -351,7 +362,7 @@ def feature_columns(matrix: pd.DataFrame) -> list[str]:
 
 def features_for_race(year: int, round_number: int) -> pd.DataFrame:
     base = load_base()
-    matrix = build_matrix(base, BASIC_FEATURES + HISTORY_FEATURES, target="podium")
+    matrix = build_matrix(base, BASIC_FEATURES + HISTORY_FEATURES, target=["podium"])
     matrix = relativize(matrix, driver_cols=DRIVER_FEATURES, team_cols=TEAM_FEATURES)
     return matrix[(matrix["year"] == year) & (matrix["round_number"] == round_number)]
 
@@ -360,7 +371,7 @@ if __name__ == "__main__":
     print("base:", base.shape)
     save(base, "feature_base", dir=DATASETS_DIR)
 
-    matrix = build_matrix(base, BASIC_FEATURES + HISTORY_FEATURES, target="podium")
+    matrix = build_matrix(base, BASIC_FEATURES + HISTORY_FEATURES, target=["podium", "finish_position"])
     matrix = relativize(matrix, driver_cols=DRIVER_FEATURES, team_cols=TEAM_FEATURES)
     print("matrix:", matrix.shape)
     print("features:", feature_columns(matrix))
