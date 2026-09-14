@@ -91,9 +91,21 @@ def t_position(base: pd.DataFrame) -> pd.Series:
     y = position.fillna(field_size).astype("Int64")
     return y.where(_started(base), other=pd.NA).astype("Int64")
 
+def t_relevance(base: pd.DataFrame) -> pd.Series:
+    """Graded ranking relevance for a learning-to-rank model: field_size -
+    position, so P1 scores highest and a DNF (fallback to field_size in
+    t_position) scores 0 same as last-place. Ties among low-relevance rows
+    (several DNFs in one race) are fine for rank:ndcg — it only needs
+    higher-relevance rows ranked above lower ones, and the podium spots
+    (1st/2nd/3rd) are each exactly one driver, never tied."""
+    field_size = base.groupby(["year", "round_number"])["driver_id"].transform("size")
+    return (field_size - t_position(base)).astype("Int64")
+
+
 TARGETS = {
     "podium": t_podium,
     "finish_position": t_position,
+    "relevance": t_relevance,
 }
 
 
